@@ -310,8 +310,6 @@ Checks for Phase 1:
   the sample: it's usually just a customer who changed their mind
   before an agency was settled, not a data gap)
 - Duplicate `po_no` within the same upload
-- A commission amount present with no corresponding paid date, or vice
-  versa
 - Paid dates out of chronological order (e.g. Sixth Instalment Paid
   Date earlier than First Instalment Paid Date)
 - Zero or negative Net Price
