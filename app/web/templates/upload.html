@@ -1,0 +1,13 @@
+{% extends "base.html" %}
+{% block title %}Upload Commission Base Report{% endblock %}
+{% block content %}
+  <h1>Upload Commission Base Report</h1>
+  <p class="muted">Upload the Kenjin Master report Excel file. The system will check every PO for newly-due full-payment or instalment commission since the last upload.</p>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Commission Base Report (.xlsx)
+      <input type="file" name="report_file" accept=".xlsx" required>
+    </label>
+    <button class="button" type="submit">Process upload</button>
+  </form>
+{% endblock %}

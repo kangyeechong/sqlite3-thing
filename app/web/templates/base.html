@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Agent Commission Tool{% endblock %}</title>
+  <style>
+    body { font-family: Arial, Helvetica, sans-serif; max-width: 920px; margin: 40px auto; padding: 0 20px; color: #22282a; }
+    nav { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 28px; border-bottom: 1px solid #dad4c6; padding-bottom: 14px; }
+    nav strong { font-size: 18px; }
+    nav a { color: #6b4f28; }
+    h1 { font-size: 24px; }
+    h2 { font-size: 18px; margin-top: 32px; color: #6b4f28; }
+    table { border-collapse: collapse; width: 100%; margin: 12px 0 24px; }
+    th, td { border: 1px solid #dad4c6; padding: 8px 10px; text-align: left; font-size: 14px; }
+    th { background: #f3f2ec; }
+    .flash { background: #f3e8d6; border-left: 3px solid #a9762c; padding: 10px 14px; margin-bottom: 20px; }
+    .button { display: inline-block; background: #8b6b3d; color: white; padding: 9px 18px; text-decoration: none; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; }
+    .button:hover { background: #6b4f28; }
+    .money { font-family: "Courier New", monospace; text-align: right; }
+    label { display: block; margin-bottom: 14px; font-size: 14px; }
+    input[type=email], input[type=password] { display: block; margin-top: 4px; padding: 8px; width: 260px; border: 1px solid #dad4c6; border-radius: 4px; }
+    .muted { color: #5c6467; font-size: 13.5px; }
+  </style>
+</head>
+<body>
+  <nav>
+    <strong>Agent Commission Tool</strong>
+    {% if session.get('user_email') %}
+      <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.logout') }}">Log out</a></span>
+    {% endif %}
+  </nav>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}
+      {% for message in messages %}
+        <div class="flash">{{ message }}</div>
+      {% endfor %}
+    {% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</body>
+</html>

@@ -19,7 +19,12 @@ _HEADER_FONT = Font(name="Arial", size=11, bold=True)
 _TITLE_FONT = Font(name="Arial", size=13, bold=True)
 _MONEY_FORMAT = "#,##0.00"
 
-_TRIGGER_LABELS = {
+# Public (not underscore-prefixed): the web layer's results page
+# imports this too, so the on-screen review a user checks before
+# downloading always shows the same labels as the file they then
+# download - one definition, not two copies that can quietly drift
+# apart.
+TRIGGER_LABELS = {
     "full_payment": "Full Payment",
     "installment_1": "Instalment 1",
     "installment_6": "Instalment 6 (Balance)",
@@ -67,7 +72,7 @@ def _load_run_rows(conn, commission_run_id):
             "lot_no": r["lot_no"],
             "agent_name": r["agent_name"] or "(unassigned)",
             "agency_code": r["agency_code"] or "(No Agency)",
-            "trigger_label": _TRIGGER_LABELS.get(r["trigger_type"], r["trigger_type"]),
+            "trigger_label": TRIGGER_LABELS.get(r["trigger_type"], r["trigger_type"]),
             "trigger_date": r["trigger_date"],
             "net_price": r["net_price"],
             "amount": r["amount"],
