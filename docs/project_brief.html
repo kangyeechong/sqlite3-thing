@@ -1,0 +1,534 @@
+<title>Agent Commission Tool</title>
+<style>
+  @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600&family=Public+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500&display=swap');
+
+  :root{
+    --bg:#F5F2EC;
+    --surface:#FFFFFF;
+    --surface-2:#EFEAE0;
+    --ink:#22282A;
+    --ink-muted:#5C6467;
+    --accent:#8B6B3D;
+    --accent-deep:#6B4F28;
+    --line:#DAD4C6;
+    --good:#3D6B57;
+    --good-bg:#E4EEE8;
+    --pending:#A9762C;
+    --pending-bg:#F3E8D6;
+    --future:#7A7368;
+    --future-bg:#EDEAE2;
+    --shadow: 0 1px 2px rgba(34,40,42,0.06), 0 8px 24px rgba(34,40,42,0.05);
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#181512;
+      --surface:#211D18;
+      --surface-2:#2A241D;
+      --ink:#ECE6D9;
+      --ink-muted:#A99F8C;
+      --accent:#C89B5C;
+      --accent-deep:#E0B979;
+      --line:#3A3327;
+      --good:#7BB39B;
+      --good-bg:#213029;
+      --pending:#D4A24C;
+      --pending-bg:#332616;
+      --future:#8A8272;
+      --future-bg:#28241C;
+      --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#181512;
+    --surface:#211D18;
+    --surface-2:#2A241D;
+    --ink:#ECE6D9;
+    --ink-muted:#A99F8C;
+    --accent:#C89B5C;
+    --accent-deep:#E0B979;
+    --line:#3A3327;
+    --good:#7BB39B;
+    --good-bg:#213029;
+    --pending:#D4A24C;
+    --pending-bg:#332616;
+    --future:#8A8272;
+    --future-bg:#28241C;
+    --shadow: 0 1px 2px rgba(0,0,0,0.3), 0 8px 24px rgba(0,0,0,0.35);
+  }
+
+  *{box-sizing:border-box;}
+  body{
+    background:var(--bg);
+    color:var(--ink);
+    font-family:'Public Sans', system-ui, -apple-system, sans-serif;
+    font-size:16px;
+    line-height:1.6;
+    padding-inline:20px;
+    padding-block:56px;
+  }
+  .page{
+    max-width:740px;
+    margin:0 auto;
+    display:flex;
+    flex-direction:column;
+    gap:44px;
+  }
+
+  h1,h2,h3{
+    font-family:'Fraunces', Georgia, serif;
+    font-weight:600;
+    text-wrap:balance;
+    color:var(--ink);
+    margin:0;
+  }
+
+  .eyebrow{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12px;
+    letter-spacing:0.09em;
+    text-transform:uppercase;
+    color:var(--accent);
+    font-weight:500;
+  }
+
+  .mono{ font-family:'IBM Plex Mono', monospace; }
+
+  p{ margin:0; color:var(--ink); }
+  p + p{ margin-top:12px; }
+  .muted{ color:var(--ink-muted); }
+
+  /* ---- masthead ---- */
+  .masthead{
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+    padding-bottom:28px;
+    border-bottom:1px solid var(--line);
+  }
+  .masthead .org{
+    display:flex;
+    justify-content:space-between;
+    align-items:baseline;
+    gap:16px;
+    flex-wrap:wrap;
+  }
+  .masthead .org-name{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    letter-spacing:0.06em;
+    color:var(--ink-muted);
+  }
+  .masthead .doc-date{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    color:var(--ink-muted);
+  }
+  .masthead h1{
+    font-size:clamp(28px, 5vw, 38px);
+    line-height:1.15;
+  }
+  .masthead .subtitle{
+    color:var(--ink-muted);
+    font-size:17px;
+    max-width:58ch;
+  }
+
+  /* ---- status strip ---- */
+  .status-strip{
+    display:flex;
+    flex-wrap:wrap;
+    gap:10px;
+  }
+  .chip{
+    display:inline-flex;
+    align-items:center;
+    gap:7px;
+    padding:7px 13px;
+    border-radius:999px;
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    font-weight:500;
+    border:1px solid transparent;
+  }
+  .chip .dot{
+    width:7px; height:7px; border-radius:50%;
+    flex:none;
+  }
+  .chip.good{ background:var(--good-bg); color:var(--good); }
+  .chip.good .dot{ background:var(--good); }
+  .chip.pending{ background:var(--pending-bg); color:var(--pending); }
+  .chip.pending .dot{ background:var(--pending); }
+  .chip.future{ background:var(--future-bg); color:var(--future); }
+  .chip.future .dot{ background:var(--future); }
+
+  /* ---- section ---- */
+  section{
+    display:flex;
+    flex-direction:column;
+    gap:14px;
+  }
+  section > .eyebrow{ margin-bottom:-2px; }
+  section h2{ font-size:23px; }
+
+  .lede{
+    font-size:16.5px;
+  }
+
+  /* ---- two-up problem/approach ---- */
+  .split{
+    display:grid;
+    grid-template-columns:1fr 1fr;
+    gap:20px;
+  }
+  @media (max-width:560px){ .split{ grid-template-columns:1fr; } }
+  .split .block{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:18px 20px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .split .block h3{
+    font-size:16px;
+    color:var(--accent-deep);
+  }
+  .split .block p{ font-size:14.5px; color:var(--ink-muted); }
+
+  /* ---- rules table ---- */
+  .rules-table{
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+    background:var(--surface);
+  }
+  .rule-row{
+    display:grid;
+    grid-template-columns: 1fr 100px 1.4fr;
+    gap:16px;
+    padding:14px 18px;
+    align-items:baseline;
+  }
+  .rule-row + .rule-row{ border-top:1px solid var(--line); }
+  .rule-row.head{
+    background:var(--surface-2);
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.07em;
+    text-transform:uppercase;
+    color:var(--ink-muted);
+    padding-block:10px;
+  }
+  .rule-row .name{ font-weight:600; font-size:14.5px; }
+  .rule-row .pct{ font-family:'IBM Plex Mono', monospace; color:var(--accent-deep); font-weight:500; font-size:14.5px; }
+  .rule-row .note{ font-size:13.5px; color:var(--ink-muted); }
+  @media (max-width:560px){
+    .rule-row{ grid-template-columns:1fr; gap:4px; }
+    .rule-row.head{ display:none; }
+    .rule-row .pct::before{ content:"Commission: "; color:var(--ink-muted); font-family:'Public Sans',sans-serif; }
+  }
+
+  /* ---- diagram ---- */
+  .diagram-wrap{
+    background:var(--surface);
+    border:1px solid var(--line);
+    border-radius:10px;
+    padding:22px 18px;
+    overflow-x:auto;
+  }
+  .diagram-wrap svg{ display:block; margin:0 auto; }
+
+  /* ---- roadmap ---- */
+  .roadmap{
+    display:flex;
+    flex-direction:column;
+    border:1px solid var(--line);
+    border-radius:10px;
+    overflow:hidden;
+    background:var(--surface);
+  }
+  .step{
+    display:grid;
+    grid-template-columns:40px 1fr auto;
+    gap:14px;
+    padding:16px 18px;
+    align-items:start;
+  }
+  .step + .step{ border-top:1px solid var(--line); }
+  .step .num{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:13px;
+    color:var(--accent);
+    padding-top:2px;
+  }
+  .step .body h3{ font-size:15px; margin-bottom:3px; }
+  .step .body p{ font-size:13.5px; color:var(--ink-muted); }
+  .step .state{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:11px;
+    letter-spacing:0.06em;
+    text-transform:uppercase;
+    padding:4px 9px;
+    border-radius:6px;
+    white-space:nowrap;
+    align-self:start;
+  }
+  .step .state.good{ background:var(--good-bg); color:var(--good); }
+  .step .state.pending{ background:var(--pending-bg); color:var(--pending); }
+  .step .state.future{ background:var(--future-bg); color:var(--future); }
+  @media (max-width:560px){
+    .step{ grid-template-columns:28px 1fr; }
+    .step .state{ grid-column:2; margin-top:6px; }
+  }
+
+  /* ---- deferred list ---- */
+  .deferred{
+    display:flex;
+    flex-wrap:wrap;
+    gap:9px;
+  }
+  .deferred span{
+    font-family:'IBM Plex Mono', monospace;
+    font-size:12.5px;
+    color:var(--ink-muted);
+    background:var(--surface-2);
+    border:1px solid var(--line);
+    border-radius:7px;
+    padding:6px 11px;
+  }
+
+  /* ---- callout ---- */
+  .callout{
+    background:var(--surface-2);
+    border-left:3px solid var(--accent);
+    border-radius:0 10px 10px 0;
+    padding:18px 22px;
+    display:flex;
+    flex-direction:column;
+    gap:8px;
+  }
+  .callout h2{ font-size:19px; }
+  .callout ul{ margin:4px 0 0 0; padding-left:20px; }
+  .callout li{ margin-bottom:6px; font-size:15px; }
+
+  footer{
+    border-top:1px solid var(--line);
+    padding-top:18px;
+    font-size:12.5px;
+    color:var(--ink-muted);
+    display:flex;
+    justify-content:space-between;
+    flex-wrap:wrap;
+    gap:8px;
+  }
+</style>
+
+<div class="page">
+
+  <div class="masthead">
+    <div class="org">
+      <span class="org-name">XIAO EN KL BERHAD &middot; AGENT RELATIONS</span>
+      <span class="doc-date">Internal project brief &middot; Phase 1</span>
+    </div>
+    <h1>Agent Commission Tool</h1>
+    <p class="subtitle">Replacing the twice-monthly manual Excel commission process with a web-based ledger that remembers contract state between cycles &mdash; so nothing has to be cross-checked by eye, and every payout has a written reason.</p>
+    <div class="status-strip">
+      <span class="chip good"><span class="dot"></span>Business rules confirmed against real export data</span>
+      <span class="chip good"><span class="dot"></span>Data model drafted &amp; reviewed</span>
+      <span class="chip pending"><span class="dot"></span>Build starting</span>
+    </div>
+  </div>
+
+  <section>
+    <span class="eyebrow">Why</span>
+    <h2>The problem with the current process</h2>
+    <div class="split">
+      <div class="block">
+        <h3>Today</h3>
+        <p>Twice a month, someone opens the Kenjin export and a separate payment list, and manually checks &mdash; per contract &mdash; whether installment&nbsp;1 or installment&nbsp;6 was just paid since the last check. Nothing remembers this between cycles; it's re-derived by eye, every time.</p>
+      </div>
+      <div class="block">
+        <h3>The risk</h3>
+        <p>A missed row means an agent doesn't get paid on time. A double-counted row means Accounts pays commission twice. Because state isn't tracked anywhere, an error is silent until someone notices &mdash; usually the agent.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Approach</span>
+    <h2>What the tool actually does</h2>
+    <p class="lede">A private internal site, not a public app. The existing workflow stays the same on both ends &mdash; Kenjin export in, Excel report out &mdash; but a real database sits in the middle as the single source of truth for what's already been paid.</p>
+    <div class="split">
+      <div class="block">
+        <h3>Upload</h3>
+        <p>The same Kenjin Master report your team already generates, uploaded through a login &mdash; not a shared password.</p>
+      </div>
+      <div class="block">
+        <h3>Download</h3>
+        <p>An Excel file listing exactly what's newly due this cycle, formatted for Accounts &mdash; the manual cross-check is gone, not the Excel handoff.</p>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Rules encoded</span>
+    <h2>Commission logic, Phase 1</h2>
+    <div class="rules-table">
+      <div class="rule-row head"><span>Trigger</span><span>Rate</span><span>Condition</span></div>
+      <div class="rule-row">
+        <span class="name">Full payment</span>
+        <span class="pct">15%</span>
+        <span class="note">Released 5 days after the customer's full-settlement date (Pre-Need). At-Need contracts skip this wait but require an inurnment date on file.</span>
+      </div>
+      <div class="rule-row">
+        <span class="name">Installment 1 paid</span>
+        <span class="pct">7.5%</span>
+        <span class="note">Always installment #1, regardless of whether the plan runs 6, 12, 18, or 24 months.</span>
+      </div>
+      <div class="rule-row">
+        <span class="name">Installment 6 paid</span>
+        <span class="pct">7.5%</span>
+        <span class="note">Always installment #6, same rule &mdash; never the plan's final installment.</span>
+      </div>
+    </div>
+    <p class="muted" style="font-size:13.5px">A contract on hold (incomplete documents) or marked cancelled / withdrawn is excluded from every run until that status changes.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Contract lifecycle</span>
+    <h2>How a contract's state is tracked</h2>
+    <div class="diagram-wrap">
+      <svg viewBox="0 0 700 210" width="100%" style="max-width:680px" role="img" aria-label="State diagram: a contract starts Active, then follows either the Full Payment path or the Installment path to Complete.">
+        <defs>
+          <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+            <path d="M0,0 L10,5 L0,10 z" fill="var(--ink-muted)"></path>
+          </marker>
+        </defs>
+        <style>
+          .node rect{ fill:var(--surface); stroke:var(--line); stroke-width:1.2; }
+          .node.key rect{ stroke:var(--accent); stroke-width:1.6; }
+          .node text{ font-family:'IBM Plex Mono', monospace; font-size:11.5px; fill:var(--ink); }
+          .node .pct{ fill:var(--accent-deep); font-weight:500; }
+          .edge{ stroke:var(--ink-muted); stroke-width:1.2; fill:none; }
+          .lbl{ font-family:'Public Sans', sans-serif; font-size:11px; fill:var(--ink-muted); }
+        </style>
+
+        <!-- Active -->
+        <g class="node">
+          <rect x="10" y="88" width="92" height="34" rx="7"></rect>
+          <text x="56" y="109" text-anchor="middle">ACTIVE</text>
+        </g>
+
+        <!-- top path: full payment -->
+        <path class="edge" d="M102,100 C140,100 140,45 175,45" marker-end="url(#arrow)"></path>
+        <text class="lbl" x="118" y="60">full payment</text>
+        <g class="node key">
+          <rect x="177" y="26" width="150" height="38" rx="7"></rect>
+          <text x="252" y="42" text-anchor="middle">FULL SETTLEMENT</text>
+          <text x="252" y="57" text-anchor="middle" class="pct">15% due (&minus;5d gate)</text>
+        </g>
+        <path class="edge" d="M327,45 C400,45 420,100 470,100" marker-end="url(#arrow)"></path>
+
+        <!-- bottom path: installments -->
+        <path class="edge" d="M102,110 C140,110 140,160 175,160" marker-end="url(#arrow)"></path>
+        <text class="lbl" x="118" y="172">installment</text>
+        <g class="node key">
+          <rect x="177" y="141" width="140" height="38" rx="7"></rect>
+          <text x="247" y="157" text-anchor="middle">INSTALMENT 1</text>
+          <text x="247" y="172" text-anchor="middle" class="pct">7.5% due</text>
+        </g>
+        <path class="edge" d="M317,160 C355,160 355,160 393,160" marker-end="url(#arrow)"></path>
+        <g class="node key">
+          <rect x="395" y="141" width="140" height="38" rx="7"></rect>
+          <text x="465" y="157" text-anchor="middle">INSTALMENT 6</text>
+          <text x="465" y="172" text-anchor="middle" class="pct">7.5% due</text>
+        </g>
+        <path class="edge" d="M535,155 C560,140 560,115 560,115" marker-end="url(#arrow)"></path>
+
+        <!-- Complete -->
+        <g class="node">
+          <rect x="562" y="88" width="120" height="34" rx="7"></rect>
+          <text x="622" y="109" text-anchor="middle">COMPLETE</text>
+        </g>
+
+        <!-- on hold / cancelled note -->
+        <text class="lbl" x="56" y="145" text-anchor="middle">on hold &middot;</text>
+        <text class="lbl" x="56" y="158" text-anchor="middle">cancelled &middot;</text>
+        <text class="lbl" x="56" y="171" text-anchor="middle">withdrawn</text>
+      </svg>
+    </div>
+    <p class="muted" style="font-size:13.5px">If nothing new was crossed since the last upload, nothing happens &mdash; the contract carries forward silently. That silence is the point: no flag, no re-review, no manual memory required.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Accountability</span>
+    <h2>Every payout has a written reason</h2>
+    <p>Individual logins, not a shared password &mdash; every upload and every commission run is tied to whoever processed it. Every time a commission becomes due, the system writes down what triggered it and when, so "why was this paid" has a factual answer instead of a reconstruction from old spreadsheets.</p>
+  </section>
+
+  <section>
+    <span class="eyebrow">Build plan</span>
+    <h2>Shipped in stages, verified at each step</h2>
+    <div class="roadmap">
+      <div class="step">
+        <span class="num">01</span>
+        <div class="body">
+          <h3>Full-payment flagging</h3>
+          <p>Import, cooling-off gate, 15% calculation, basic listing.</p>
+        </div>
+        <span class="state pending">Next</span>
+      </div>
+      <div class="step">
+        <span class="num">02</span>
+        <div class="body">
+          <h3>Instalment state tracking</h3>
+          <p>The 7.5% + 7.5% logic and the audit log, tested against a contract progressing across several cycles.</p>
+        </div>
+        <span class="state future">Planned</span>
+      </div>
+      <div class="step">
+        <span class="num">03</span>
+        <div class="body">
+          <h3>Check-cycle report</h3>
+          <p>The twice-monthly commission run and the Excel export for Accounts.</p>
+        </div>
+        <span class="state future">Planned</span>
+      </div>
+      <div class="step">
+        <span class="num">04</span>
+        <div class="body">
+          <h3>Logins &amp; web interface</h3>
+          <p>Wraps the proven ledger logic once it's already correct.</p>
+        </div>
+        <span class="state future">Planned</span>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <span class="eyebrow">Deferred by design</span>
+    <h2>Not in Phase 1</h2>
+    <p class="muted">Left open in the data model so they can be added later without a rebuild &mdash; not built now, to keep the first version correct and reviewable.</p>
+    <div class="deferred">
+      <span>AW Consultancy agency/agent split</span>
+      <span>Facebook-lead deduction</span>
+      <span>KPI &amp; incentive bonuses</span>
+      <span>Automatic parsing of the payment-receipt list</span>
+    </div>
+  </section>
+
+  <div class="callout">
+    <h2>What this needs from leadership</h2>
+    <ul>
+      <li>Sign-off to begin building Stage&nbsp;1 against the confirmed rules above.</li>
+      <li>A decision on where the finished tool and its code are hosted &mdash; under a company account, not a personal one, so access survives staff turnover.</li>
+    </ul>
+  </div>
+
+  <footer>
+    <span>Agent Commission Tool &middot; Phase 1 of the planned Agent Relations Platform</span>
+    <span class="mono">Draft for review</span>
+  </footer>
+
+</div>
