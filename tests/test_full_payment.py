@@ -197,6 +197,27 @@ def test_reinstated_po_becomes_eligible_again(tmp_path):
     assert "status_changed" in flags  # surfaced for a human to confirm, not silent
 
 
+def test_ac001_seeded_as_no_agent_split_new_agency_seeded_as_split(tmp_path):
+    """
+    AC001 (XEMP, in-house staff) must default to splits_by_agent=False
+    on first sight; any other new agency code defaults to True.
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 90020, "Customer ID": "CUST020", "Customer Name": "Customer 20", "Agency Code": "AC001"},
+        {"No": 2, "PO No": 90021, "Customer ID": "CUST021", "Customer Name": "Customer 21", "Agency Code": "AC999"},
+    ])
+
+    db_path = _db_path(tmp_path)
+    process_upload(db_path, str(xlsx_path))
+
+    conn = get_connection(db_path)
+    ac001 = conn.execute("SELECT splits_by_agent FROM agencies WHERE agency_code = 'AC001'").fetchone()
+    ac999 = conn.execute("SELECT splits_by_agent FROM agencies WHERE agency_code = 'AC999'").fetchone()
+    assert ac001["splits_by_agent"] == 0
+    assert ac999["splits_by_agent"] == 1
+
+
 def test_review_panel_flags_duplicate_po_in_same_upload(tmp_path):
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(xlsx_path, [

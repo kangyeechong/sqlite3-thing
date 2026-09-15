@@ -12,7 +12,7 @@ from dataclasses import dataclass, field
 
 import openpyxl
 
-from . import parsing
+from . import parsing, rules
 
 # The real Master sheet has a title block in rows 1-5, headers on row 6,
 # and data from row 7 onward - confirmed against the real sample file.
@@ -222,10 +222,11 @@ def _upsert_contract(conn, fields, now_iso):
     )
 
     if fields["agency_code"]:
+        splits_by_agent = 0 if fields["agency_code"] in rules.AGENCIES_WITHOUT_PER_AGENT_SPLIT else 1
         conn.execute(
-            "INSERT INTO agencies (agency_code) VALUES (?) "
+            "INSERT INTO agencies (agency_code, splits_by_agent) VALUES (?, ?) "
             "ON CONFLICT(agency_code) DO NOTHING",
-            (fields["agency_code"],),
+            (fields["agency_code"], splits_by_agent),
         )
 
     existing = conn.execute(

@@ -10,6 +10,7 @@ import os
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
 from .commission import process_commission_run
+from .report import generate_commission_run_report
 
 
 def process_upload(db_path, file_path, run_date=None, created_by_user=None):
@@ -53,3 +54,18 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
         "commission_run_id": run_id,
         "raised_events": raised_events,
     }
+
+
+def generate_report(db_path, commission_run_id, output_path):
+    """
+    Writes the downloadable Excel report for a commission run that was
+    already created by process_upload. Deliberately a separate step,
+    not bundled into process_upload automatically - the intended flow
+    is: upload, review what got raised on screen, then download, so a
+    problem can be caught before a file ever reaches Accounts.
+    """
+    conn = get_connection(db_path)
+    try:
+        return generate_commission_run_report(conn, commission_run_id, output_path)
+    finally:
+        conn.close()

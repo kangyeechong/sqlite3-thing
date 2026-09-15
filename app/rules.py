@@ -34,3 +34,14 @@ COOLING_OFF_DAYS_BEFORE_RELEASE = 5
 # Documented for reference (this is the legal/contractual cooling-off
 # window); not used directly in the release calculation above.
 COOLING_OFF_TOTAL_DAYS = 10
+
+# --- Export grouping exceptions ---------------------------------------
+# Agencies that do NOT get a per-agent breakdown in the Excel export -
+# see docs/data_model.md section 6a. AC001 (XEMP) is in-house sales
+# staff, not an external agency, so there's no agency-vs-agent split to
+# show. This only seeds a brand-new agency's `splits_by_agent` flag the
+# first time it's ever seen; it is never used to overwrite an existing
+# agency row, since that flag is meant to be data staff can maintain
+# going forward (e.g. if another agency needs the same exception
+# later), not something re-derived from the Excel file every import.
+AGENCIES_WITHOUT_PER_AGENT_SPLIT = {"AC001"}
