@@ -9,14 +9,15 @@ import os
 
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
-from .commission import process_full_payment_run
+from .commission import process_commission_run
 
 
 def process_upload(db_path, file_path, run_date=None, created_by_user=None):
     """
-    Runs the full Step 1 pipeline against one uploaded Master report:
+    Runs the full pipeline against one uploaded Master report:
       1. import every PO into the ledger (creates the DB if needed)
-      2. determine what's newly due for full-payment commission
+      2. determine what's newly due - full payment, installment 1, or
+         installment 6
       3. log it, mark it flagged, group it under one commission_run
 
     Returns a dict with the import result and the commission run
@@ -35,7 +36,7 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
     try:
         import_result = import_master_report(conn, file_path)
 
-        run_id, raised_events = process_full_payment_run(
+        run_id, raised_events = process_commission_run(
             conn,
             as_of=run_date,
             run_date=run_date,
