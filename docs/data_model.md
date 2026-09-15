@@ -84,8 +84,9 @@ Notes on specific columns:
 ### `agencies`
 | column | type | notes |
 |---|---|---|
-| agency_code | TEXT PK | e.g. `AC001`, `AC108-02`. Nullable FK from contracts — blank Agency Code in the source file looks like a data-entry gap, not a real "no agency" case (per your read of the sample), so the importer **warns** on a blank rather than silently accepting it |
+| agency_code | TEXT PK | e.g. `AC001`, `AC108-02`. Nullable FK from contracts |
 | name | TEXT | filled in as we learn agency names, not required for Phase 1 math |
+| splits_by_agent | BOOLEAN, default `true` | whether the export further breaks this agency's sheet down by individual agent (see §6a). `AC001` (XEMP — in-house sales staff, not an external agency) is the one confirmed exception, set to `false`. A flag in the data, not a hardcoded "if AW Consultancy" check, so adding another exception later is a data change, not a code change. |
 
 ### `contracts`
 One row per PO — this is the core ledger table.
@@ -208,6 +209,26 @@ This replaces the manual "look at the date, count days, type EXPIRED"
 step entirely — the tool computes it from the date column on every
 import.
 
+**Why 5 days, not the full 10:** Accounts department processing is slow,
+so the commission team pre-emptively flags a contract at day 5 rather
+than waiting out the full cooling-off period — by the time Accounts
+actually gets to processing it, the full 10 days will have elapsed
+anyway. Confirmed directly, not a guess.
+
+### 4b. Net Price — Promotion vs. Discount
+
+Both are subtracted from Niche/Tablet Price to get Net Price, and both
+default to 0 when not applicable — no schema difference between them.
+The distinction is business context, not calculation:
+
+- **Promotion**: a broad, campaign-level reduction (applies the same way
+  across many customers during a promo period).
+- **Discount**: a one-off, case-specific reduction (negotiated per
+  customer).
+
+Commission is always calculated on Net Price regardless of which
+column(s) were used to get there.
+
 ---
 
 ## 5. The core import logic (what actually happens on upload)
@@ -256,6 +277,49 @@ hardcoding a percentage — when the agency-split rules get built later,
 they're new entries here, not new `if` statements buried in importer
 code.
 
+### 6a. Export grouping (agency → agent)
+
+The Excel export mirrors how the Master report gets split today:
+
+1. **Every agency gets its own sheet** — this is universal, not
+   conditional.
+2. **Within an agency where `splits_by_agent = true`**, that sheet is
+   further broken into one section per agent (matches AW Consultancy's
+   individual agent sheets in the sample file).
+3. **Where `splits_by_agent = false`** (currently just `AC001`/XEMP),
+   the agency's sheet stays flat — no per-agent breakdown, since XEKL
+   pays the agency as a whole and it's the agency's own business how
+   they distribute internally.
+
+This is pure grouping of already-calculated flat commission amounts —
+it does **not** compute AW Consultancy's actual agency/agent split math
+(the 7%/8%, 3.5%/4%, FB-lead-deduction columns from the real sheet).
+That's still deferred (§7); Phase 1 shows the right rows to the right
+agent, at the flat commission figure, not yet split into two cuts.
+
+### 6b. Import review panel
+
+Every upload is scanned for anomalies **before** anything is calculated.
+Nothing here blocks the import or auto-corrects anything — it's a
+plain list shown to whoever's processing, so real data-entry mistakes
+get caught by a human instead of silently producing a wrong number.
+Checks for Phase 1:
+
+- Blank `agency_code` on a PO that's still `active` (not
+  cancelled/withdrawn — a blank on those is expected, per your read of
+  the sample: it's usually just a customer who changed their mind
+  before an agency was settled, not a data gap)
+- Duplicate `po_no` within the same upload
+- A commission amount present with no corresponding paid date, or vice
+  versa
+- Paid dates out of chronological order (e.g. Sixth Instalment Paid
+  Date earlier than First Instalment Paid Date)
+- Zero or negative Net Price
+- An `agency_code` never seen before (possible typo vs. a genuinely new
+  agency)
+- A cancelled / on-hold / withdrawn PO that still has a paid-date
+  column filled in
+
 ---
 
 ## 7. Explicitly out of scope for Phase 1 (schema left open, no logic built)
@@ -275,8 +339,6 @@ code.
 
 ## 8. Open items I'm assuming reasonable defaults for — flag if wrong
 
-- **Non-AW agencies with blank Agency Code**: treated as a data-quality
-  warning on import, not silently accepted.
 - **`net_price` is recomputed on import**, not trusted verbatim from the
   sheet, since it's a derived value and the sheet could have a stale
   manually-typed number.
@@ -284,3 +346,7 @@ code.
   `commission_run` can be created any day; the dates are for your own
   reference, not a validation rule (per your "loose, depends on
   workload" note).
+- **Cancelled PO reinstatement**: you mentioned a "put back cancelled
+  PO" case — still confirming whether `cancelled` needs a path back to
+  `active` in the state machine, or whether that's handled some other
+  way. Not yet built either way; flag when you know.
