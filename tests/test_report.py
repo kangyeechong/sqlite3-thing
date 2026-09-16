@@ -111,7 +111,12 @@ def test_a_po_with_two_triggers_in_one_run_is_a_single_row_not_two(tmp_path):
     assert row["Balance Half Commission Paid Date"] is None
 
 
-def test_newly_due_commission_cells_are_highlighted_yellow(tmp_path):
+def test_full_payment_row_is_shaded_green_matching_the_real_file(tmp_path):
+    """
+    Confirmed against the real sample file's actual cell formatting
+    (not guessed): full-payment rows there are shaded green across the
+    whole row - not just the commission cell.
+    """
     today = datetime.date.today()
     settlement_date = today - datetime.timedelta(days=6)
 
@@ -131,14 +136,90 @@ def test_newly_due_commission_cells_are_highlighted_yellow(tmp_path):
 
     workbook = openpyxl.load_workbook(report_path)
     sheet = workbook["All"]
-    headers, data_rows = _find_table_rows(sheet)
+    headers, _ = _find_table_rows(sheet)
     header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
     data_row_num = header_row_num + 1
+
     commission_col = headers.index("Full Payment Commission (RM)") + 1
-    other_col = headers.index("Customer Name") + 1
+    unrelated_col = headers.index("Customer Name") + 1
+
+    assert sheet.cell(row=data_row_num, column=commission_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
+    # Whole row, not just the commission cell.
+    assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
+
+
+def test_instalment_commission_cell_is_highlighted_yellow_not_the_whole_row(tmp_path):
+    """
+    Instalments get a yellow highlight on just the specific commission
+    cell that became due, not the whole row - unlike full payment.
+    """
+    today = datetime.date.today()
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60016, "Customer ID": "CUST216", "Customer Name": "Customer 216",
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["All"]
+    headers, _ = _find_table_rows(sheet)
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    data_row_num = header_row_num + 1
+
+    commission_col = headers.index("1st Half Commission (RM)") + 1
+    unrelated_col = headers.index("Customer Name") + 1
 
     assert sheet.cell(row=data_row_num, column=commission_col).fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
-    assert sheet.cell(row=data_row_num, column=other_col).fill.start_color.rgb in ("00000000", None)
+    assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00000000", None)
+
+
+def test_yellow_survives_on_a_row_that_is_also_shaded_green(tmp_path):
+    """
+    A PO whose very first import already has both full payment and an
+    instalment due (both triggers are checked independently, with no
+    rule against both firing at once) must still show the instalment
+    cell in yellow, not have the row's green silently swallow it.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60017, "Customer ID": "CUST217", "Customer Name": "Customer 217",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": settlement_date,
+        "First Instalment Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    # Sanity check this scenario actually raises both triggers.
+    assert {e["trigger_type"] for e in result["raised_events"]} == {"full_payment", "installment_1"}
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["All"]
+    headers, _ = _find_table_rows(sheet)
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    data_row_num = header_row_num + 1
+
+    instalment_col = headers.index("1st Half Commission (RM)") + 1
+    unrelated_col = headers.index("Customer Name") + 1
+
+    assert sheet.cell(row=data_row_num, column=instalment_col).fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
+    assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
 
 
 def test_no_split_agency_sheet_is_one_flat_table(tmp_path):

@@ -29,7 +29,22 @@ _BODY_FONT = Font(name="Arial", size=11)
 _HEADER_FONT = Font(name="Arial", size=11, bold=True)
 _TITLE_FONT = Font(name="Arial", size=13, bold=True)
 _MONEY_FORMAT = "#,##0.00"
+
+# Green matched against the real sample file's actual cell formatting
+# (not guessed): full-payment rows there use theme accent6 (#70AD47)
+# tinted 0.6, reproduced here as plain RGB (Excel's tint formula
+# applied by hand) since openpyxl's fill doesn't need to reference the
+# workbook's theme to look the same.
 _YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
+_GREEN_FILL = PatternFill(start_color="C6DEB5", end_color="C6DEB5", fill_type="solid")   # full payment rows
+
+# The real file also shades cancelled/withdrawn rows a light beige
+# (theme accent2 #ED7D31 tinted 0.8, ~#FBE5D6) - confirmed, but NOT
+# implemented yet: this report only lists POs with commission newly
+# due this run, so a cancelled PO (nothing due) never appears as a row
+# at all. There's nothing to paint beige until/unless the report
+# becomes a full status listing rather than a due-items list - that's
+# a bigger design question, not a missing color constant.
 
 COMPANY_SHORT_NAME = "XEKL"
 
@@ -76,13 +91,12 @@ _MONEY_COLUMNS = {
     "Niche/Tablet Price (RM)", "Promotion (RM)", "Discount (RM)", "Nett Price (RM)",
     "Full Payment Commission (RM)", "1st Half Commission (RM)", "Balance Half Commission (RM)",
 }
-# The three columns that get highlighted when THIS run put a value in
-# them - matching the original workflow's "highlight newly-processed
-# cells in yellow for attention" convention. The three *_Paid_Date
-# columns for commission (as opposed to installment) are deliberately
-# left blank and never highlighted - those get filled in later by
-# Accounts once they've actually paid it, same as the real workflow.
-_HIGHLIGHT_COLUMNS = {"Full Payment Commission (RM)", "1st Half Commission (RM)", "Balance Half Commission (RM)"}
+# Instalment columns that get a yellow CELL highlight when THIS run put
+# a value in them. Full payment doesn't get a cell highlight - it gets
+# the whole ROW shaded green instead (see _GREEN_FILL / _write_table),
+# matching the real file's convention exactly: full payment marks the
+# entire row, instalments mark just the specific commission cell.
+_HIGHLIGHT_COLUMNS = {"1st Half Commission (RM)", "Balance Half Commission (RM)"}
 
 _SUMMARY_COLUMNS = [
     "DATE RECORD", "Full Commission", "First Half Commission",
@@ -286,12 +300,21 @@ def _write_table(sheet, rows, start_row, title):
 
     totals = {key: 0.0 for key in _TOTAL_KEYS}
     for i, row in enumerate(rows, start=1):
+        is_full_payment_row = row.get("full_payment_commission") is not None
         for col, (label, key) in enumerate(_COLUMNS, start=1):
             value = i if key == "row_no" else row.get(key)
             cell = sheet.cell(row=row_num, column=col, value=value)
             cell.font = _BODY_FONT
             if label in _MONEY_COLUMNS:
                 cell.number_format = _MONEY_FORMAT
+            if is_full_payment_row:
+                cell.fill = _GREEN_FILL
+            # Checked with a separate `if`, not `elif` - a PO whose
+            # first-ever import already has both full payment AND an
+            # instalment due (both triggers are evaluated independently
+            # in app/commission.py, with no rule against both firing at
+            # once) must still show its instalment cell in yellow, not
+            # let the row's green silently swallow it.
             if label in _HIGHLIGHT_COLUMNS and value is not None:
                 cell.fill = _YELLOW_FILL
         for key in totals:

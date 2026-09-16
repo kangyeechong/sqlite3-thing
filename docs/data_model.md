@@ -336,12 +336,30 @@ usable day to day:
   in later by Accounts once they've actually paid it, same as the real
   workflow (§ E of the written doc). This tool's job stops at flagging
   and calculating, never at recording an actual payout.
-- **Yellow highlighting** on whichever commission cell(s) this run
-  newly populated, matching the "highlight for attention" convention
-  from the manual process. The `Total` row places each commission
-  column's subtotal directly beneath its own column (via a
-  key→column-index lookup, not position-counted from the end of the
-  column list, after that exact approach caused a real bug once).
+- **Highlighting colors, confirmed against the real sample file's
+  actual cell formatting** (not guessed — checked the theme colors and
+  tints openpyxl reports for real rows):
+  - **Full payment rows are shaded green across the whole row**
+    (theme accent6 `#70AD47` tinted 0.6, reproduced as `#C6DEB5`).
+  - **Instalment commission cells get a yellow highlight on just that
+    one cell**, not the whole row (matches the manual process's
+    "highlight for attention" convention).
+  - These can both apply to the same row (a PO whose first-ever import
+    already has both full payment and an instalment due) — yellow is
+    checked and applied *after* green, so it's never silently
+    swallowed by the row's green background.
+  - **Not yet implemented**: the real file also shades cancelled/
+    withdrawn rows light beige (theme accent2 `#ED7D31` tinted 0.8).
+    There's nowhere for that to go yet, because this report only lists
+    POs with commission newly due — a cancelled PO has nothing due, so
+    it never appears as a row at all. Adding it means deciding whether
+    the report becomes a full status listing (every PO, matching the
+    original cumulative Master file) rather than a due-items list —
+    flagged to the user as a real design question, not a quick fix.
+- The `Total` row places each commission column's subtotal directly
+  beneath its own column (via a key→column-index lookup, not
+  position-counted from the end of the column list, after that exact
+  approach caused a real bug once).
 - A **cumulative "Date Record" summary table** at the bottom of the
   "All" sheet, built from *every* commission run ever processed (not
   just the current one) — this needed no new calculation, since
