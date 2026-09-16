@@ -318,6 +318,36 @@ Checks for Phase 1:
 - A cancelled / on-hold / withdrawn PO that still has a paid-date
   column filled in
 
+### 6c. Report layout
+
+The downloadable Excel report deliberately mirrors the real Master
+Report's own layout (§2), not a simplified summary — confirmed this
+mattered after an early version was too far from what's actually
+usable day to day:
+
+- **One row per PO**, with separate `Full Settlement Paid Date` /
+  `Full Payment Commission (RM)`, `First Instalment Paid Date` /
+  `1st Half Commission (RM)`, `Sixth Instalment Paid Date` /
+  `Balance Half Commission (RM)` columns — a PO due for two triggers
+  in the same run gets one row with both sets of columns filled, not
+  two rows.
+- The three `*_Paid_Date` columns for commission itself (as opposed to
+  the installment paid dates) are always left blank — those get filled
+  in later by Accounts once they've actually paid it, same as the real
+  workflow (§ E of the written doc). This tool's job stops at flagging
+  and calculating, never at recording an actual payout.
+- **Yellow highlighting** on whichever commission cell(s) this run
+  newly populated, matching the "highlight for attention" convention
+  from the manual process. The `Total` row places each commission
+  column's subtotal directly beneath its own column (via a
+  key→column-index lookup, not position-counted from the end of the
+  column list, after that exact approach caused a real bug once).
+- A **cumulative "Date Record" summary table** at the bottom of the
+  "All" sheet, built from *every* commission run ever processed (not
+  just the current one) — this needed no new calculation, since
+  `commission_events`/`commission_runs` already record everything
+  needed; it's a new view over existing data.
+
 ---
 
 ## 7. Explicitly out of scope for Phase 1 (schema left open, no logic built)
@@ -326,7 +356,14 @@ Checks for Phase 1:
   split, FB-lead 3%/1.5% deductions from the agency's portion). The real
   numbers, confirmed from the doc, differ from the brief's original
   guess of 7.5%/7.5% — noted here so nobody builds against the wrong
-  figures later.
+  figures later. **Still blocked on a real data gap**: checked all 59
+  rows of the real sample file's Remarks column for any FB-lead
+  signal (the written doc says "AW Consultancy will need to remark if
+  the sales are from ToL FB leads") and found none at all. Either it
+  didn't come up in this particular batch, or it's tracked somewhere
+  this tool hasn't seen yet (a different column, a separate list) —
+  needs confirming with the business before this can be built at all,
+  not just before it's prioritized.
 - KPI bonus, agency development fund, agent incentive.
 - Auto-importing/parsing the AOR file.
 - Reversible name encryption (mentioned as a feature suggestion in the
@@ -344,7 +381,17 @@ Checks for Phase 1:
   `commission_run` can be created any day; the dates are for your own
   reference, not a validation rule (per your "loose, depends on
   workload" note).
-- **Cancelled PO reinstatement**: you mentioned a "put back cancelled
-  PO" case — still confirming whether `cancelled` needs a path back to
-  `active` in the state machine, or whether that's handled some other
-  way. Not yet built either way; flag when you know.
+- **Cancelled PO reinstatement**: resolved. Status is re-derived fresh
+  from Remarks on every import rather than a one-way lock, so a PO
+  whose Remarks no longer say "cancelled" naturally becomes active
+  again on the next upload — no special-case code needed. Tested and
+  confirmed against a fake multi-cycle scenario.
+- **Who can download a commission run**: any logged-in staff member
+  can currently download any run by id, not just the ones they
+  personally uploaded. Kept this way deliberately (not an oversight) —
+  the rest of the system already treats commission data as shared team
+  state (one ledger, one audit log everyone can see), and the
+  individual-login requirement in the original brief was framed around
+  *accountability* ("who processed what matters"), not around hiding
+  runs between teammates. Flag if that reading is wrong; restricting to
+  uploader-only is a small change if so.
