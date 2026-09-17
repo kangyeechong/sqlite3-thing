@@ -81,6 +81,167 @@ def test_report_has_an_all_sheet_and_a_sheet_per_agency(tmp_path):
     assert po_numbers == {60001, 60002}
 
 
+def test_cancelled_po_stays_visible_beige_with_commission_cleared(tmp_path):
+    """
+    The report is a standing ledger, not a due-items list - a cancelled
+    PO must never disappear. Confirmed with the business: it stays
+    listed under its agency, shaded beige, with its commission figure
+    cleared (not just tinted over) since nothing is owed on it any
+    more.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60030, "Customer ID": "CUST230", "Customer Name": "Customer 230",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        },
+        {
+            "No": 2, "PO No": 60031, "Customer ID": "CUST231", "Customer Name": "Customer 231",
+            "Niche/Tablet Price (RM)": 15000,
+            "Agency Code": "AC001",
+            "Remarks": "Cancelled by customer request",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AC001"]
+    headers, ac001_rows = _find_table_rows(sheet)
+    po_numbers = {r["PO No"] for r in ac001_rows}
+    assert po_numbers == {60030, 60031}  # the cancelled PO is still there
+
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    cancelled_row = next(r for r in ac001_rows if r["PO No"] == 60031)
+    assert cancelled_row["Full Payment Commission (RM)"] is None  # value cleared, not just tinted
+
+    data_row_num = header_row_num + [r["PO No"] for r in ac001_rows].index(60031) + 1
+    po_col = headers.index("PO No") + 1
+    assert sheet.cell(row=data_row_num, column=po_col).fill.start_color.rgb in ("00FBE5D6", "FFFBE5D6")
+
+    # Cancelled PO's (would-be) 1500.00 commission must not count
+    # toward the Total row - only the active PO's 1500.00 does.
+    total_row_num = header_row_num + len(ac001_rows) + 1
+    commission_col = headers.index("Full Payment Commission (RM)") + 1
+    assert sheet.cell(row=total_row_num, column=commission_col).value == 1500.0
+
+
+def test_unpaid_po_stays_visible_with_no_color(tmp_path):
+    """A PO with nothing paid yet must still appear - not omitted, and
+    not colored, since nothing has happened on it either way."""
+    today = datetime.date.today()
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60032, "Customer ID": "CUST232", "Customer Name": "Customer 232",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": today - datetime.timedelta(days=6),
+            "Agency Code": "AC001",
+        },
+        {
+            "No": 2, "PO No": 60033, "Customer ID": "CUST233", "Customer Name": "Customer 233",
+            "Niche/Tablet Price (RM)": 10000,
+            # nothing paid at all
+            "Agency Code": "AC001",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AC001"]
+    headers, ac001_rows = _find_table_rows(sheet)
+    assert {r["PO No"] for r in ac001_rows} == {60032, 60033}
+
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    data_row_num = header_row_num + [r["PO No"] for r in ac001_rows].index(60033) + 1
+    po_col = headers.index("PO No") + 1
+    assert sheet.cell(row=data_row_num, column=po_col).fill.start_color.rgb in ("00000000", None)
+
+
+def test_an_earlier_confirmation_shows_plain_on_a_later_download_not_yellow(tmp_path):
+    """
+    Confirmed against the real file: once something is confirmed, it
+    keeps showing on every future download (this is a standing ledger),
+    but only the run that actually confirmed it gets to paint it
+    yellow - an older confirmed figure must carry forward plainly, not
+    get re-highlighted every single time someone downloads again.
+    """
+    db_path = _db_path(tmp_path)
+
+    day1 = datetime.date.today() - datetime.timedelta(days=20)
+    xlsx1 = tmp_path / "run1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 60034, "Customer ID": "CUST234", "Customer Name": "Customer 234",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": day1 - datetime.timedelta(days=6),
+        "Agency Code": "AC001",
+    }])
+    result1 = process_upload(db_path, str(xlsx1), run_date=day1)
+    confirm_all_pending(db_path, result1["commission_run_id"])
+
+    day2 = datetime.date.today()
+    xlsx2 = tmp_path / "run2.xlsx"
+    build_master_report(xlsx2, [
+        {
+            "No": 1, "PO No": 60034, "Customer ID": "CUST234", "Customer Name": "Customer 234",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": day1 - datetime.timedelta(days=6),
+            "Agency Code": "AC001",
+        },
+        {
+            "No": 2, "PO No": 60035, "Customer ID": "CUST235", "Customer Name": "Customer 235",
+            "Niche/Tablet Price (RM)": 20000,
+            "Full Settlement Paid Date": day2 - datetime.timedelta(days=6),
+            "Agency Code": "AC001",
+        },
+    ])
+    result2 = process_upload(db_path, str(xlsx2), run_date=day2)
+    confirm_all_pending(db_path, result2["commission_run_id"])
+
+    report_path = tmp_path / "report2.xlsx"
+    generate_report(db_path, result2["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AC001"]
+    headers, ac001_rows = _find_table_rows(sheet)
+    assert {r["PO No"] for r in ac001_rows} == {60034, 60035}  # run 1's PO still shows up
+
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    commission_col = headers.index("Full Payment Commission (RM)") + 1
+    old_po_row_num = header_row_num + [r["PO No"] for r in ac001_rows].index(60034) + 1
+    new_po_row_num = header_row_num + [r["PO No"] for r in ac001_rows].index(60035) + 1
+
+    # Both are full-payment rows, so both are green (fully paid off is
+    # a lifetime fact) - but full payment doesn't get its own cell
+    # highlight either way (whole row green, no separate yellow), so
+    # what distinguishes "confirmed this run" is the movement line.
+    assert sheet.cell(row=old_po_row_num, column=commission_col).value == 1500.0
+    assert sheet.cell(row=new_po_row_num, column=commission_col).value == 3000.0
+
+    header_row_num_2 = header_row_num
+    total_row_num = header_row_num_2 + len(ac001_rows) + 1
+    movement_row_num = total_row_num + 1
+    assert sheet.cell(row=total_row_num, column=commission_col).value == 4500.0  # lifetime total
+    assert sheet.cell(row=movement_row_num, column=commission_col).value == 3000.0  # just run 2's own addition
+
+
 def test_a_po_with_two_triggers_in_one_run_is_a_single_row_not_two(tmp_path):
     """
     Matches the real Master Report's layout: a PO due for both

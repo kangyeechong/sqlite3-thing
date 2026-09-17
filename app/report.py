@@ -1,12 +1,18 @@
 """
-Builds the downloadable Excel report for one commission run - the file
-that gets handed to Accounts.
+Builds the downloadable Excel report - a full standing ledger, not a
+"what's newly due this run" list. Every contract in the database
+appears, always: paid, still pending, or cancelled/withdrawn - so a PO
+that hasn't paid yet, or was cancelled, never disappears from view.
+`commission_run_id` only controls which cells are highlighted yellow
+(whatever got confirmed in that specific run) and gates the download
+itself (refuses if that run confirmed nothing at all, since there'd be
+nothing new to justify a fresh file).
 
 Column layout deliberately mirrors the real Kenjin Master Report
 (docs/data_model.md section 2) rather than a simplified summary: one
-row per PO, with the Full/1st Half/Balance Half columns each filled in
-only when that specific trigger fired in this run - so a PO with two
-triggers due in the same run (rare, but real - see
+row per PO, with the Full/1st Half/Balance Half columns filled in from
+whatever has EVER been confirmed for that PO (not just this run) - so
+a PO with two triggers confirmed in the same run (rare, but real - see
 docs/data_model.md section 5) still gets ONE row, not two, exactly
 like the source file would show it.
 
@@ -45,13 +51,12 @@ _MONEY_FORMAT = "#,##0.00"
 _YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 _GREEN_FILL = PatternFill(start_color="C6DEB5", end_color="C6DEB5", fill_type="solid")   # fully paid off rows
 
-# The real file also shades cancelled/withdrawn rows a light beige
-# (theme accent2 #ED7D31 tinted 0.8, ~#FBE5D6) - confirmed, but NOT
-# implemented yet: this report only lists POs with commission newly
-# due this run, so a cancelled PO (nothing due) never appears as a row
-# at all. There's nothing to paint beige until/unless the report
-# becomes a full status listing rather than a due-items list - that's
-# a bigger design question, not a missing color constant.
+# Matched against the real sample file's actual cell formatting: theme
+# accent2 (#ED7D31) tinted 0.8. Cancelled/withdrawn POs get this shade
+# across the whole row - they still appear (see _load_master_rows),
+# just visibly marked as "nothing more is ever due here" rather than
+# disappearing.
+_BEIGE_FILL = PatternFill(start_color="FBE5D6", end_color="FBE5D6", fill_type="solid")
 
 # Marks the FB-lead-deduction cell in the agency/agent split columns
 # (see _write_agency_agent_split_columns) when a row's relevant trigger
@@ -150,112 +155,139 @@ def _cooling_off_status(signature_date_str, run_date):
     return None
 
 
-def _load_run_rows(conn, commission_run_id, run_date):
+def _load_master_rows(conn, commission_run_id, run_date):
     """
-    Joins this run's commission_events against contracts/customers/
-    agencies and collapses them to one row per PO - a PO with two
-    triggers due in the same run ends up with both sets of columns
-    filled on a single row, not two separate rows.
+    Every contract in the database, always - paid, still pending, or
+    cancelled/withdrawn. A PO that hasn't paid anything yet, or was
+    cancelled, still gets a row here; it just shows blank/beige instead
+    of a commission figure. This is what makes the report a standing
+    ledger rather than a "what's due this run" list - see the module
+    docstring.
+
+    Commission figures come from whatever has EVER been confirmed for
+    that PO (any run, not just this one) - a PO's Full Payment
+    Commission, once confirmed, keeps showing on every future download,
+    not just the run that confirmed it. Each trigger also carries an
+    "confirmed_this_run" flag so _write_table can tell which cells (if
+    any) are the newly-added ones to highlight yellow, versus older
+    confirmed figures that just carry forward plainly.
 
     `run_date` is needed to compute each row's Cooling Off Period
     status (EXPIRED once COOLING_OFF_TOTAL_DAYS have passed since
     Signature Date - see _cooling_off_status).
     """
-    cursor = conn.execute(
+    contract_rows = conn.execute(
         """
         SELECT
             c.po_no, c.po_date, c.signature_date, c.customer_id, c.lot_no,
-            c.niche_price, c.promotion, c.discount, c.net_price,
+            c.niche_price, c.promotion, c.discount, c.net_price, c.status,
             c.full_settlement_paid_date, c.first_installment_paid_date,
             c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
             c.fb_lead_referred,
             c.full_commission_paid_date, c.installment_1_commission_paid_date,
             c.installment_6_commission_paid_date,
             cu.name AS customer_name,
-            a.splits_by_agent, a.agency_group, a.commission_split_type,
-            e.trigger_type, e.amount, e.agency_amount, e.agent_amount
-        FROM commission_events e
-        JOIN contracts c ON c.po_no = e.po_no
+            a.splits_by_agent, a.agency_group, a.commission_split_type
+        FROM contracts c
         LEFT JOIN customers cu ON cu.customer_id = c.customer_id
         LEFT JOIN agencies a ON a.agency_code = c.agency_code
-        WHERE e.commission_run_id = ? AND e.status = 'confirmed'
         ORDER BY c.po_no
-        """,
-        (commission_run_id,),
-    )
+        """
+    ).fetchall()
 
     by_po = {}
-    for r in cursor.fetchall():
-        po_no = r["po_no"]
-        if po_no not in by_po:
-            by_po[po_no] = {
-                "po_no": po_no,
-                "po_date": r["po_date"],
-                "signature_date": r["signature_date"],
-                "customer_id": r["customer_id"],
-                "customer_name": r["customer_name"],
-                "lot_no": r["lot_no"],
-                "niche_price": r["niche_price"],
-                "promotion": r["promotion"],
-                "discount": r["discount"],
-                "net_price": r["net_price"],
-                "cooling_off_period": _cooling_off_status(r["signature_date"], run_date),
-                "full_settlement_paid_date": None,
-                "full_payment_commission": None,
-                # Accounts fills these in by hand on the real file once
-                # they've actually sent the money - read back from
-                # whatever the most recent upload had on file, never
-                # computed or written by this tool.
-                "full_commission_paid_date": r["full_commission_paid_date"],
-                "first_installment_paid_date": None,
-                "installment_1_commission": None,
-                "installment_1_commission_paid_date": r["installment_1_commission_paid_date"],
-                "sixth_installment_paid_date": None,
-                "installment_6_commission": None,
-                "installment_6_commission_paid_date": r["installment_6_commission_paid_date"],
-                "agent_name": r["agent_name"] or "(unassigned)",
-                "agency_code": r["agency_code"] or "(No Agency)",
-                # Several agency_codes can share one real-world agency
-                # (AW Consultancy's AC108-01/-02/-03) - agency_group is
-                # the label the combined top-level sheet groups under.
-                # Falls back to the raw agency_code when no group is
-                # set, so every other agency still gets its own single
-                # sheet exactly as before this existed.
-                "agency_group": r["agency_group"] or r["agency_code"] or "(No Agency)",
-                "remarks": r["remarks"],
-                # No agency on file -> nothing to group by agent for
-                # either; default to a flat listing rather than
-                # splitting by agent.
-                "splits_by_agent": bool(r["splits_by_agent"]) if r["agency_code"] else False,
-                "commission_split_type": r["commission_split_type"] or "flat",
-                "fb_lead_referred": bool(r["fb_lead_referred"]),
-                # Only populated for agency_agent_split agencies (AW
-                # Consultancy) - the per-trigger Agency/Agent split
-                # figures shown in the extra columns to the right of
-                # the main table (see _write_agency_agent_split_columns).
-                "full_payment_agency_amount": None,
-                "full_payment_agent_amount": None,
-                "installment_1_agency_amount": None,
-                "installment_1_agent_amount": None,
-                "installment_6_agency_amount": None,
-                "installment_6_agent_amount": None,
-            }
-        row = by_po[po_no]
-        if r["trigger_type"] == "full_payment":
-            row["full_settlement_paid_date"] = r["full_settlement_paid_date"]
-            row["full_payment_commission"] = r["amount"]
-            row["full_payment_agency_amount"] = r["agency_amount"]
-            row["full_payment_agent_amount"] = r["agent_amount"]
-        elif r["trigger_type"] == "installment_1":
-            row["first_installment_paid_date"] = r["first_installment_paid_date"]
-            row["installment_1_commission"] = r["amount"]
-            row["installment_1_agency_amount"] = r["agency_amount"]
-            row["installment_1_agent_amount"] = r["agent_amount"]
-        elif r["trigger_type"] == "installment_6":
-            row["sixth_installment_paid_date"] = r["sixth_installment_paid_date"]
-            row["installment_6_commission"] = r["amount"]
-            row["installment_6_agency_amount"] = r["agency_amount"]
-            row["installment_6_agent_amount"] = r["agent_amount"]
+    for r in contract_rows:
+        by_po[r["po_no"]] = {
+            "po_no": r["po_no"],
+            "po_date": r["po_date"],
+            "signature_date": r["signature_date"],
+            "customer_id": r["customer_id"],
+            "customer_name": r["customer_name"],
+            "lot_no": r["lot_no"],
+            "niche_price": r["niche_price"],
+            "promotion": r["promotion"],
+            "discount": r["discount"],
+            "net_price": r["net_price"],
+            # Cancelled/withdrawn rows are shaded beige in _write_table
+            # regardless of any commission history - see is_cancelled_row.
+            "status": r["status"],
+            "cooling_off_period": _cooling_off_status(r["signature_date"], run_date),
+            # The paid-date itself is a raw fact from the sheet, shown
+            # whether or not the resulting commission has been
+            # confirmed yet; the commission figure below only appears
+            # once actually confirmed.
+            "full_settlement_paid_date": r["full_settlement_paid_date"],
+            "full_payment_commission": None,
+            "full_payment_confirmed_this_run": False,
+            # Accounts fills these in by hand on the real file once
+            # they've actually sent the money - read back from
+            # whatever the most recent upload had on file, never
+            # computed or written by this tool.
+            "full_commission_paid_date": r["full_commission_paid_date"],
+            "first_installment_paid_date": r["first_installment_paid_date"],
+            "installment_1_commission": None,
+            "installment_1_confirmed_this_run": False,
+            "installment_1_commission_paid_date": r["installment_1_commission_paid_date"],
+            "sixth_installment_paid_date": r["sixth_installment_paid_date"],
+            "installment_6_commission": None,
+            "installment_6_confirmed_this_run": False,
+            "installment_6_commission_paid_date": r["installment_6_commission_paid_date"],
+            "agent_name": r["agent_name"] or "(unassigned)",
+            "agency_code": r["agency_code"] or "(No Agency)",
+            # Several agency_codes can share one real-world agency
+            # (AW Consultancy's AC108-01/-02/-03) - agency_group is
+            # the label the combined top-level sheet groups under.
+            # Falls back to the raw agency_code when no group is
+            # set, so every other agency still gets its own single
+            # sheet exactly as before this existed.
+            "agency_group": r["agency_group"] or r["agency_code"] or "(No Agency)",
+            "remarks": r["remarks"],
+            # No agency on file -> nothing to group by agent for
+            # either; default to a flat listing rather than
+            # splitting by agent.
+            "splits_by_agent": bool(r["splits_by_agent"]) if r["agency_code"] else False,
+            "commission_split_type": r["commission_split_type"] or "flat",
+            "fb_lead_referred": bool(r["fb_lead_referred"]),
+            # Only populated for agency_agent_split agencies (AW
+            # Consultancy) - the per-trigger Agency/Agent split
+            # figures shown in the extra columns to the right of
+            # the main table (see _write_agency_agent_split_columns).
+            "full_payment_agency_amount": None,
+            "full_payment_agent_amount": None,
+            "installment_1_agency_amount": None,
+            "installment_1_agent_amount": None,
+            "installment_6_agency_amount": None,
+            "installment_6_agent_amount": None,
+        }
+
+    event_rows = conn.execute(
+        """
+        SELECT po_no, trigger_type, amount, agency_amount, agent_amount, commission_run_id
+        FROM commission_events
+        WHERE status = 'confirmed'
+        """
+    ).fetchall()
+
+    for e in event_rows:
+        row = by_po.get(e["po_no"])
+        if row is None:
+            continue  # a contract row always exists for a real event; defensive only
+        confirmed_this_run = e["commission_run_id"] == commission_run_id
+        if e["trigger_type"] == "full_payment":
+            row["full_payment_commission"] = e["amount"]
+            row["full_payment_confirmed_this_run"] = confirmed_this_run
+            row["full_payment_agency_amount"] = e["agency_amount"]
+            row["full_payment_agent_amount"] = e["agent_amount"]
+        elif e["trigger_type"] == "installment_1":
+            row["installment_1_commission"] = e["amount"]
+            row["installment_1_confirmed_this_run"] = confirmed_this_run
+            row["installment_1_agency_amount"] = e["agency_amount"]
+            row["installment_1_agent_amount"] = e["agent_amount"]
+        elif e["trigger_type"] == "installment_6":
+            row["installment_6_commission"] = e["amount"]
+            row["installment_6_confirmed_this_run"] = confirmed_this_run
+            row["installment_6_agency_amount"] = e["agency_amount"]
+            row["installment_6_agent_amount"] = e["agent_amount"]
 
     return list(by_po.values())
 
@@ -387,6 +419,28 @@ _TOTAL_KEYS = (
     "full_payment_commission", "installment_1_commission", "installment_6_commission",
 )
 
+# The three commission-amount keys - cleared to blank (not just tinted
+# beige) on a cancelled/withdrawn row, per the business: once a PO is
+# marked cancelled, nothing is owed on it any more, so showing a
+# leftover figure there would read as still-payable. Price columns
+# (Niche/Promotion/Discount/Nett) are left alone - those are just the
+# sale's own record, not a "what's owed" figure.
+_COMMISSION_VALUE_KEYS = {"full_payment_commission", "installment_1_commission", "installment_6_commission"}
+
+# Maps each commission-amount column key to the row-dict flag that says
+# whether THIS run is the one that confirmed it. Two uses: a highlight
+# column only turns yellow when that's true, not merely because it has
+# a value (older confirmed figures now carry forward on every future
+# download - see _load_master_rows - so "has a value" alone would
+# wrongly re-highlight everything, every time); and the "movement as
+# at" line sums only the rows where this is true, separately from the
+# Total row's lifetime sum - see _write_table.
+_CONFIRMED_THIS_RUN_KEY = {
+    "full_payment_commission": "full_payment_confirmed_this_run",
+    "installment_1_commission": "installment_1_confirmed_this_run",
+    "installment_6_commission": "installment_6_confirmed_this_run",
+}
+
 # One blank column of separation, then the agency/agent split table
 # starts here - see _write_agency_agent_split_columns.
 _SPLIT_COLUMNS_START = len(_COLUMNS) + 2
@@ -431,11 +485,15 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
     """
     col = _SPLIT_COLUMNS_START
     totals = {}
+    movement_totals = {}
     for trigger_type, super_header, deduction_pct, agency_pct, agent_pct, agency_key, agent_key in _SPLIT_COLUMN_GROUPS:
         fb_col, agency_col, agent_col = col, col + 1, col + 2
         totals[fb_col] = 0.0
         totals[agency_col] = 0.0
         totals[agent_col] = 0.0
+        movement_totals[agency_col] = 0.0
+        movement_totals[agent_col] = 0.0
+        confirmed_this_run_key = f"{trigger_type}_confirmed_this_run"
 
         sheet.cell(row=start_row, column=fb_col, value=super_header).font = _TITLE_FONT
         sheet.merge_cells(start_row=start_row, start_column=fb_col, end_row=start_row, end_column=agent_col)
@@ -449,8 +507,9 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
 
         row_num = first_data_row
         for row in rows:
-            agency_amount = row.get(agency_key)
-            agent_amount = row.get(agent_key)
+            is_cancelled_row = row.get("status") in ("cancelled", "withdrawn")
+            agency_amount = None if is_cancelled_row else row.get(agency_key)
+            agent_amount = None if is_cancelled_row else row.get(agent_key)
             trigger_fired = agency_amount is not None or agent_amount is not None
 
             fb_cell = sheet.cell(row=row_num, column=fb_col)
@@ -466,10 +525,16 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
             agent_cell = sheet.cell(row=row_num, column=agent_col, value=agent_amount)
             for cell in (fb_cell, agency_cell, agent_cell):
                 cell.font = _BODY_FONT
+                if is_cancelled_row:
+                    cell.fill = _BEIGE_FILL
             agency_cell.number_format = _MONEY_FORMAT
             agent_cell.number_format = _MONEY_FORMAT
-            totals[agency_col] += agency_amount or 0.0
-            totals[agent_col] += agent_amount or 0.0
+            if not is_cancelled_row:
+                totals[agency_col] += agency_amount or 0.0
+                totals[agent_col] += agent_amount or 0.0
+                if row.get(confirmed_this_run_key):
+                    movement_totals[agency_col] += agency_amount or 0.0
+                    movement_totals[agent_col] += agent_amount or 0.0
             row_num += 1
 
         col += 3
@@ -478,6 +543,17 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
         cell = sheet.cell(row=total_row, column=c, value=round(total, 2))
         cell.font = _HEADER_FONT
         cell.number_format = _MONEY_FORMAT
+
+    # Same "movement as at" idea as the main table (_write_table) - one
+    # row under the lifetime Total, showing just what THIS run added to
+    # the Agency/Agent split. This is where the real file's own
+    # "movement as at {date}" line was actually first confirmed.
+    movement_row = total_row + 1
+    for c, amount in movement_totals.items():
+        cell = sheet.cell(row=movement_row, column=c, value=round(amount, 2))
+        cell.font = _BODY_FONT
+        cell.number_format = _MONEY_FORMAT
+        cell.fill = _YELLOW_FILL
 
 
 def _fb_deduction_amount(net_price, fb_lead_referred, deduction_pct):
@@ -491,9 +567,11 @@ def _fb_deduction_amount(net_price, fb_lead_referred, deduction_pct):
     return commission._calculate_commission(net_price, deduction_pct)
 
 
-def _write_table(sheet, rows, start_row, title, split_group_name=None):
-    """Writes one titled table (header + data + bold total row) starting
-    at start_row. Returns the next free row, so tables can be stacked."""
+def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None):
+    """Writes one titled table (header + data + bold total row, plus a
+    "movement as at" line for whatever this specific run newly
+    confirmed) starting at start_row. Returns the next free row, so
+    tables can be stacked."""
     row_num = start_row
     title_cell = sheet.cell(row=row_num, column=1, value=title)
     title_cell.font = _TITLE_FONT
@@ -507,7 +585,14 @@ def _write_table(sheet, rows, start_row, title, split_group_name=None):
     first_data_row = row_num
 
     totals = {key: 0.0 for key in _TOTAL_KEYS}
+    movement = {key: 0.0 for key in _CONFIRMED_THIS_RUN_KEY}
     for i, row in enumerate(rows, start=1):
+        # A cancelled/withdrawn PO shades the whole row beige and its
+        # commission figures are cleared, not just tinted - see
+        # _COMMISSION_VALUE_KEYS. Checked first so it overrides green
+        # below (a PO that was fully paid and *then* cancelled still
+        # reads as "nothing owed now", the more important fact).
+        is_cancelled_row = row.get("status") in ("cancelled", "withdrawn")
         # Green means the PO is fully paid off, commission-wise - either
         # a one-off full payment, or (for an installment plan) its
         # Balance Half, the last commission trigger that plan will ever
@@ -518,28 +603,44 @@ def _write_table(sheet, rows, start_row, title, split_group_name=None):
         # is ever due on this PO for commission purposes once its
         # Balance Half is paid, so it's "done" the same as a full
         # payment is.
-        is_fully_paid_row = (
+        is_fully_paid_row = (not is_cancelled_row) and (
             row.get("full_payment_commission") is not None
             or row.get("installment_6_commission") is not None
         )
         for col, (label, key) in enumerate(_COLUMNS, start=1):
-            value = i if key == "row_no" else row.get(key)
+            if key == "row_no":
+                value = i
+            elif is_cancelled_row and key in _COMMISSION_VALUE_KEYS:
+                value = None
+            else:
+                value = row.get(key)
             cell = sheet.cell(row=row_num, column=col, value=value)
             cell.font = _BODY_FONT
             if label in _MONEY_COLUMNS:
                 cell.number_format = _MONEY_FORMAT
-            if is_fully_paid_row:
+            if is_cancelled_row:
+                cell.fill = _BEIGE_FILL
+            elif is_fully_paid_row:
                 cell.fill = _GREEN_FILL
             # Checked with a separate `if`, not `elif` - a PO whose
             # first-ever import already has both full payment AND an
             # instalment due (both triggers are evaluated independently
             # in app/commission.py, with no rule against both firing at
             # once) must still show its instalment cell in yellow, not
-            # let the row's green silently swallow it.
-            if label in _HIGHLIGHT_COLUMNS and value is not None:
+            # let the row's green silently swallow it. Gated on the
+            # confirmed_this_run flag, not merely "has a value" - a
+            # figure confirmed in an earlier run now carries forward
+            # plainly on every later download, not re-highlighted every
+            # single time (see _load_master_rows).
+            if label in _HIGHLIGHT_COLUMNS and row.get(_CONFIRMED_THIS_RUN_KEY.get(key), False):
                 cell.fill = _YELLOW_FILL
         for key in totals:
+            if is_cancelled_row and key in _COMMISSION_VALUE_KEYS:
+                continue
             totals[key] += row.get(key) or 0.0
+        for key, confirmed_key in _CONFIRMED_THIS_RUN_KEY.items():
+            if row.get(confirmed_key):
+                movement[key] += row.get(key) or 0.0
         row_num += 1
 
     # "Total" label sits under Customer Name - well clear of every
@@ -547,16 +648,35 @@ def _write_table(sheet, rows, start_row, title, split_group_name=None):
     # Price, Promotion, Discount, Nett Price, and each of the three
     # commission columns), each directly beneath its own header rather
     # than one merged figure - matches how the original file separates
-    # these out rather than lumping them into a single number.
+    # these out rather than lumping them into a single number. This is
+    # the lifetime total across every confirmed run ever, not just this
+    # one - see the "movement" line right under it for that.
     sheet.cell(row=row_num, column=_COLUMN_INDEX["customer_name"], value="Total").font = _HEADER_FONT
     for key in totals:
         cell = sheet.cell(row=row_num, column=_COLUMN_INDEX[key], value=round(totals[key], 2))
         cell.font = _HEADER_FONT
         cell.number_format = _MONEY_FORMAT
+    row_num += 1
+
+    # "movement as at {date}" - confirmed against the real file (the
+    # AW Consultancy split table's own version of this line): a second
+    # figure under the lifetime Total, showing just what THIS run added
+    # - the number Accounts actually needs for this cycle's payout
+    # requisition, as opposed to the running lifetime total above it.
+    as_at = run_date.isoformat() if isinstance(run_date, datetime.date) else run_date
+    movement_label = f"movement as at {_format_short_date(as_at)}"
+    label_cell = sheet.cell(row=row_num, column=_COLUMN_INDEX["customer_name"], value=movement_label)
+    label_cell.font = _BODY_FONT
+    for key, amount in movement.items():
+        cell = sheet.cell(row=row_num, column=_COLUMN_INDEX[key], value=round(amount, 2))
+        cell.font = _BODY_FONT
+        cell.number_format = _MONEY_FORMAT
+        cell.fill = _YELLOW_FILL
+    row_num += 1
 
     if split_group_name is not None:
         _write_agency_agent_split_columns(
-            sheet, rows, start_row, header_row, first_data_row, row_num, split_group_name
+            sheet, rows, start_row, header_row, first_data_row, row_num - 2, split_group_name
         )
 
     row_num += 1
@@ -655,18 +775,28 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     ).fetchone()
     run_date = run_row["run_date"]
 
-    rows = _load_run_rows(conn, commission_run_id, run_date)
-    if not rows:
+    # The report itself always shows every contract (see
+    # _load_master_rows), so an empty result there would only mean an
+    # empty database - the real gate is whether THIS run actually
+    # confirmed anything, since that's what would make a fresh
+    # download meaningfully different from the last one.
+    has_confirmed_this_run = conn.execute(
+        "SELECT 1 FROM commission_events WHERE commission_run_id = ? AND status = 'confirmed' LIMIT 1",
+        (commission_run_id,),
+    ).fetchone()
+    if not has_confirmed_this_run:
         raise ValueError(
             "Nothing confirmed on this commission run yet - review and confirm "
             "the detected commissions before downloading."
         )
+
+    rows = _load_master_rows(conn, commission_run_id, run_date)
     column_count = len(_COLUMNS)
 
     workbook = Workbook()
     all_sheet = workbook.active
     all_sheet.title = "All"
-    next_row = _write_table(all_sheet, rows, start_row=1, title=_title_line(COMPANY_SHORT_NAME, rows, run_date))
+    next_row = _write_table(all_sheet, rows, start_row=1, title=_title_line(COMPANY_SHORT_NAME, rows, run_date), run_date=run_date)
     _write_summary_table(all_sheet, _load_summary_rows(conn), start_row=next_row, current_run_id=commission_run_id)
     _autosize_columns(all_sheet, column_count)
 
@@ -694,7 +824,7 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
         # every other agency's sheet stays exactly as before.
         is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
         group_next_row = _write_table(
-            sheet, group_rows, start_row=1, title=_title_line(group_name, group_rows, run_date),
+            sheet, group_rows, start_row=1, title=_title_line(group_name, group_rows, run_date), run_date=run_date,
             split_group_name=group_name if is_split_group else None,
         )
         _write_summary_table(
@@ -720,7 +850,7 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
                 is_split_agent = any(row["commission_split_type"] == "agency_agent_split" for row in agent_rows)
                 agent_next_row = _write_table(
                     agent_sheet, agent_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date),
-                    split_group_name=group_name if is_split_agent else None,
+                    run_date=run_date, split_group_name=group_name if is_split_agent else None,
                 )
                 _write_summary_table(
                     agent_sheet, _load_summary_rows(conn, agency_group=group_name, agent_name=agent_name),
