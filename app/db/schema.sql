@@ -24,7 +24,19 @@ CREATE TABLE IF NOT EXISTS agencies (
     -- staff - not an external agency) is the one confirmed exception.
     -- A data flag, not a hardcoded "if AW Consultancy" check, so a
     -- future exception is a data change, not a code change.
-    splits_by_agent INTEGER NOT NULL DEFAULT 1 CHECK (splits_by_agent IN (0, 1))
+    splits_by_agent INTEGER NOT NULL DEFAULT 1 CHECK (splits_by_agent IN (0, 1)),
+
+    -- 'flat': XEKL pays this agency one commission figure and the
+    -- agency handles paying their own agent internally - the default,
+    -- and what every agency except AW Consultancy currently uses.
+    -- 'agency_agent_split': XEKL pays the agency and the agent
+    -- separately, at different percentages (see rules.py) - currently
+    -- only AW Consultancy's codes. A data flag, seeded from a known
+    -- list in rules.py on first sight of a new agency code, never
+    -- overwritten afterward - so it's editable data, not hardcoded
+    -- logic, the same reasoning as splits_by_agent above.
+    commission_split_type TEXT NOT NULL DEFAULT 'flat'
+        CHECK (commission_split_type IN ('flat', 'agency_agent_split'))
 );
 
 -- One row per PO. This is the core ledger table - its three
@@ -77,6 +89,13 @@ CREATE TABLE IF NOT EXISTS contracts (
     installment_1_commission_flagged INTEGER NOT NULL DEFAULT 0 CHECK (installment_1_commission_flagged IN (0, 1)),
     installment_6_commission_flagged INTEGER NOT NULL DEFAULT 0 CHECK (installment_6_commission_flagged IN (0, 1)),
 
+    -- Purely manual - there is no data signal for this anywhere in the
+    -- Kenjin export. An agent tells staff verbally that a lead came
+    -- from XEKL's own Facebook ads, and staff tick this themselves.
+    -- Only meaningful for agencies with commission_split_type =
+    -- 'agency_agent_split'; ignored otherwise.
+    fb_lead_referred INTEGER NOT NULL DEFAULT 0 CHECK (fb_lead_referred IN (0, 1)),
+
     remarks    TEXT,
     updated_at TEXT
 );
@@ -96,7 +115,19 @@ CREATE TABLE IF NOT EXISTS commission_events (
     po_no              INTEGER NOT NULL REFERENCES contracts(po_no),
     trigger_type       TEXT NOT NULL CHECK (trigger_type IN ('full_payment', 'installment_1', 'installment_6')),
     trigger_date       TEXT NOT NULL,
+    -- The total commission this trigger released. For a 'flat' agency
+    -- this is the whole payout. For an 'agency_agent_split' agency,
+    -- this still equals agency_amount + agent_amount (the FB-lead
+    -- deduction reduces the total, not just the agency's share) - so
+    -- every existing sum/total/report that only reads `amount` keeps
+    -- working unchanged for both agency types.
     amount             NUMERIC NOT NULL,
+    -- Only populated for 'agency_agent_split' agencies; NULL for
+    -- 'flat' ones. agency_amount already has any FB-lead deduction
+    -- applied - it is the actual amount payable to the agency, not
+    -- the pre-deduction figure.
+    agency_amount      NUMERIC,
+    agent_amount       NUMERIC,
     detected_at        TEXT NOT NULL,
     detected_by_user   TEXT,
     commission_run_id  INTEGER REFERENCES commission_runs(id)

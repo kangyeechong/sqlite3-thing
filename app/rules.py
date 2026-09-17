@@ -45,3 +45,34 @@ COOLING_OFF_TOTAL_DAYS = 10
 # going forward (e.g. if another agency needs the same exception
 # later), not something re-derived from the Excel file every import.
 AGENCIES_WITHOUT_PER_AGENT_SPLIT = {"AC001"}
+
+# --- AW Consultancy agency/agent commission split ----------------------
+# Confirmed directly, and cross-checked against real rows: e.g. PO
+# 20260266 (AC108-02, Net Price RM18,300) produces 3.5% = RM640.50 and
+# 4% = RM732.00, exactly matching the real split table shown for that
+# row. Every other agency stays 'flat' (full commission paid to the
+# agency, who distributes to their own agents themselves) - AW
+# Consultancy is the sole confirmed exception.
+AW_AGENCY_FULL_PAYMENT_PCT = 0.07
+AW_AGENT_FULL_PAYMENT_PCT = 0.08
+AW_AGENCY_INSTALLMENT_PCT = 0.035
+AW_AGENT_INSTALLMENT_PCT = 0.04
+
+# Deducted from the AGENCY's share only (never the agent's) when a
+# sale is manually flagged as FB-lead-referred (contracts.fb_lead_referred)
+# - purely a manual entry, there is no data signal for this anywhere in
+# the Kenjin export (an agent has to tell staff verbally).
+AW_FB_LEAD_DEDUCTION_FULL_PAYMENT_PCT = 0.03
+AW_FB_LEAD_DEDUCTION_INSTALLMENT_PCT = 0.015
+
+# Agency codes confirmed (from the real sample file's "AW Consultancy"
+# sheet) to use the agency/agent split above, seeded onto a brand-new
+# agency's commission_split_type the first time it's seen - same
+# never-overwrite-after-first-sight rule as
+# AGENCIES_WITHOUT_PER_AGENT_SPLIT. AW Consultancy's individual agents
+# each carry their own sub-code (AC108-01, -02, -03 confirmed so far);
+# if another agent joins with a new code, add it here - a data change,
+# not a code change. Flag to the user if a new AW Consultancy code
+# shows up that isn't in this list yet, rather than silently treating
+# it as a flat-commission agency.
+AGENCIES_WITH_AGENCY_AGENT_SPLIT = {"AC108-01", "AC108-02", "AC108-03"}

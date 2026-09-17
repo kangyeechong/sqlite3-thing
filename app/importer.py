@@ -175,9 +175,17 @@ def _review_checks(conn, fields_list):
             flags.append(ReviewFlag(po_no, "non_positive_net_price", f"Net Price is {fields['net_price']}."))
 
         if fields["agency_code"] and fields["agency_code"] not in known_agency_codes:
+            is_aw_code = fields["agency_code"] in rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT
             flags.append(ReviewFlag(
                 po_no, "unknown_agency_code",
-                f"Agency Code '{fields['agency_code']}' hasn't been seen before - check for a typo.",
+                f"Agency Code '{fields['agency_code']}' hasn't been seen before - check for a typo. "
+                + (
+                    "Recognized as an AW Consultancy code, so it'll get the agency/agent split."
+                    if is_aw_code else
+                    "New agencies default to flat commission (no agency/agent split) unless "
+                    "added to rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT - if this is actually another "
+                    "AW Consultancy agent code, add it there before relying on this run's numbers."
+                ),
             ))
             known_agency_codes.add(fields["agency_code"])  # don't re-flag within the same batch
 
@@ -223,10 +231,13 @@ def _upsert_contract(conn, fields, now_iso):
 
     if fields["agency_code"]:
         splits_by_agent = 0 if fields["agency_code"] in rules.AGENCIES_WITHOUT_PER_AGENT_SPLIT else 1
+        commission_split_type = (
+            "agency_agent_split" if fields["agency_code"] in rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT else "flat"
+        )
         conn.execute(
-            "INSERT INTO agencies (agency_code, splits_by_agent) VALUES (?, ?) "
+            "INSERT INTO agencies (agency_code, splits_by_agent, commission_split_type) VALUES (?, ?, ?) "
             "ON CONFLICT(agency_code) DO NOTHING",
-            (fields["agency_code"], splits_by_agent),
+            (fields["agency_code"], splits_by_agent, commission_split_type),
         )
 
     existing = conn.execute(
