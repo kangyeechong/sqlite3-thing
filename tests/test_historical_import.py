@@ -206,6 +206,41 @@ def test_bad_net_price_at_onboarding_does_not_permanently_lose_the_commission(tm
     assert raised_pos == {90006}
 
 
+def test_at_need_payment_after_cutoff_is_still_detected_not_lost(tmp_path):
+    """
+    Regression test: full_payment_is_due's At-Need branch deliberately
+    ignores `as_of` (no cooling-off wait for At-Need), so reusing it
+    alone for the historical cutoff check would flag an At-Need PO as
+    "already accounted for" regardless of whether its settlement date
+    is actually before or after the cutoff. An At-Need payment dated
+    AFTER the historical cutoff - a genuinely new payment - must still
+    be detected normally, not silently and permanently lost.
+    """
+    cutoff = datetime.date(2026, 6, 5)
+    after_cutoff = datetime.date(2026, 9, 1)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 90007, "Customer ID": "CUSTH7", "Customer Name": "Customer H7",
+            "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
+            "Full Settlement Paid Date": after_cutoff,
+            "Agency Code": "AC001",
+            "Remarks": "At need case, Inurnment on 10/09/2026",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 0.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 9, 17))
+
+    raised_pos = {e["po_no"] for e in result["raised_events"]}
+    assert raised_pos == {90007}  # not silently swallowed by the historical cutoff
+
+
 def test_historical_rows_only_appear_on_the_unscoped_all_view(tmp_path):
     """There's no per-agency breakdown of the sheet's own pre-existing
     history to read - only the unscoped "All" summary includes it."""

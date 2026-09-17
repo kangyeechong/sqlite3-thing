@@ -340,7 +340,15 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     """
     params = []
     if agency_group is not None:
-        query += " AND COALESCE(a.agency_group, c.agency_code) = ?"
+        # Matches the same 3-level fallback _load_master_rows uses to
+        # build the "(No Agency)" group key in the first place
+        # (agency_group -> agency_code -> the literal string) - without
+        # that last fallback, COALESCE(NULL, NULL) is NULL, which never
+        # equals the string "(No Agency)" the caller actually passes
+        # in for a contract with no agency at all, so that sheet's own
+        # Date Record summary always came up empty even though its
+        # main table correctly showed confirmed commissions.
+        query += " AND COALESCE(a.agency_group, c.agency_code, '(No Agency)') = ?"
         params.append(agency_group)
     if agent_name is not None:
         query += " AND COALESCE(c.agent_name, '(unassigned)') = ?"

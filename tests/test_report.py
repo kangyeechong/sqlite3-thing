@@ -986,6 +986,39 @@ def test_every_sheet_gets_its_own_date_record_scoped_to_itself(tmp_path):
     assert _summary_grand_total(workbook["Agent Beta"]) == 3000.0
 
 
+def test_no_agency_sheet_gets_its_own_date_record_too(tmp_path):
+    """
+    Regression test: a contract with no Agency Code at all lands on a
+    "(No Agency)" sheet whose agency_group is also the literal string
+    "(No Agency)" (see _load_master_rows's fallback) - not NULL. The
+    Date Record query's filter has to fall back to that same literal
+    string too, or COALESCE(NULL, NULL) never matches it and that
+    sheet's own summary table comes up empty even though its main
+    ledger table correctly shows the confirmed commission.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60036, "Customer ID": "CUST236", "Customer Name": "Customer 236",
+        "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
+        "Full Settlement Paid Date": settlement_date,
+        # no Agency Code at all
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert "(No Agency)" in workbook.sheetnames
+    assert _summary_grand_total(workbook["(No Agency)"]) == 1500.0
+
+
 def test_long_agency_codes_that_collide_after_truncation_get_distinct_sheets(tmp_path):
     """
     Excel sheet names cap at 31 chars. Two different agency codes that

@@ -164,7 +164,20 @@ def _flag_historically_accounted_commissions(conn, cutoff_iso_date):
     cutoff_date = datetime.date.fromisoformat(cutoff_iso_date)
     candidates = conn.execute("SELECT * FROM contracts WHERE status = 'active'").fetchall()
     for contract in candidates:
-        if commission.full_payment_is_due(contract, cutoff_date):
+        # full_payment_is_due's At-Need branch deliberately ignores
+        # `as_of` entirely (there's no cooling-off wait for At-Need -
+        # see commission.py) - it only checks that an inurnment date
+        # is on file, regardless of when. That's correct for live
+        # detection (as_of is always "today"), but here as_of is a
+        # past cutoff date, so an explicit settlement-date check is
+        # still needed on top of it for At-Need - otherwise a
+        # genuinely new At-Need payment dated AFTER the cutoff would
+        # get permanently flagged as "already accounted for" too.
+        if (
+            contract["full_settlement_paid_date"]
+            and contract["full_settlement_paid_date"] <= cutoff_iso_date
+            and commission.full_payment_is_due(contract, cutoff_date)
+        ):
             conn.execute(
                 "UPDATE contracts SET full_commission_flagged = 1 WHERE po_no = ?",
                 (contract["po_no"],),
