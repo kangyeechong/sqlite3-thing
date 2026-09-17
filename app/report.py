@@ -355,7 +355,10 @@ def _title_line(label, rows, run_date):
 # label and grand-total figure quietly landed under FCC/Agent and
 # Agency Code instead of any money column).
 _COLUMN_INDEX = {key: i for i, (_label, key) in enumerate(_COLUMNS, start=1)}
-_TOTAL_KEYS = ("full_payment_commission", "installment_1_commission", "installment_6_commission")
+_TOTAL_KEYS = (
+    "niche_price", "promotion", "discount", "net_price",
+    "full_payment_commission", "installment_1_commission", "installment_6_commission",
+)
 
 # One blank column of separation, then the agency/agent split table
 # starts here - see _write_agency_agent_split_columns.
@@ -512,12 +515,13 @@ def _write_table(sheet, rows, start_row, title, split_group_name=None):
             totals[key] += row.get(key) or 0.0
         row_num += 1
 
-    # "Total" label sits under Nett Price (the column immediately left
-    # of the three commission columns); each commission column gets its
-    # own subtotal directly beneath it, rather than one merged figure -
-    # matches how the original file separates Full / First Half /
-    # Second Half rather than lumping them into a single number.
-    sheet.cell(row=row_num, column=_COLUMN_INDEX["net_price"], value="Total").font = _HEADER_FONT
+    # "Total" label sits under Customer Name - well clear of every
+    # column that now carries its own numeric subtotal (Niche/Tablet
+    # Price, Promotion, Discount, Nett Price, and each of the three
+    # commission columns), each directly beneath its own header rather
+    # than one merged figure - matches how the original file separates
+    # these out rather than lumping them into a single number.
+    sheet.cell(row=row_num, column=_COLUMN_INDEX["customer_name"], value="Total").font = _HEADER_FONT
     for key in totals:
         cell = sheet.cell(row=row_num, column=_COLUMN_INDEX[key], value=round(totals[key], 2))
         cell.font = _HEADER_FONT

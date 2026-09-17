@@ -596,16 +596,19 @@ def test_report_total_matches_sum_of_commission_columns(tmp_path):
 
     workbook = openpyxl.load_workbook(report_path)
     _, all_rows = _find_table_rows(workbook["All"])
-    # Both rows are Full Payment triggers, so the subtotal lands under
-    # that specific column - Nett Price ("Total" label) and the other
-    # two commission columns stay at their per-row values (not summed
-    # across rows in this dict form), so check via the raw cell values.
     sheet = workbook["All"]
     header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
     total_row_num = header_row_num + len(all_rows) + 1
     headers = [cell.value for cell in sheet[header_row_num]]
     total_row_values = dict(zip(headers, [cell.value for cell in sheet[total_row_num]]))
-    assert total_row_values["Nett Price (RM)"] == "Total"
+    assert total_row_values["Customer Name"] == "Total"
+    # Niche/Promotion/Discount/Nett Price each get their own real sum
+    # too, not just the three commission columns - confirmed against
+    # the real file's own Total row.
+    assert total_row_values["Niche/Tablet Price (RM)"] == 30000.0
+    assert total_row_values["Promotion (RM)"] == 0.0
+    assert total_row_values["Discount (RM)"] == 0.0
+    assert total_row_values["Nett Price (RM)"] == 30000.0
     assert total_row_values["Full Payment Commission (RM)"] == 4500.0
     assert total_row_values["1st Half Commission (RM)"] == 0.0
     assert total_row_values["Balance Half Commission (RM)"] == 0.0
