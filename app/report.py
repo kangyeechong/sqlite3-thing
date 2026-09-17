@@ -177,7 +177,7 @@ def _load_run_rows(conn, commission_run_id, run_date):
         LEFT JOIN customers cu ON cu.customer_id = c.customer_id
         LEFT JOIN agencies a ON a.agency_code = c.agency_code
         WHERE e.commission_run_id = ?
-        ORDER BY c.agency_code, c.agent_name, c.po_no
+        ORDER BY c.po_no
         """,
         (commission_run_id,),
     )
@@ -261,6 +261,12 @@ def _load_summary_rows(conn):
     original workflow. Built entirely from commission_events/
     commission_runs, which already record everything needed - this is
     a new view over existing data, not new calculation logic.
+
+    Each row keeps its run_id so _write_summary_table can tell which
+    row is the one just processed and highlight only that one yellow -
+    confirmed against the real file: every prior "As at" row stays
+    plain, only the newest addition (and the grand total line under
+    it) is highlighted.
     """
     cursor = conn.execute(
         """
@@ -288,6 +294,7 @@ def _load_summary_rows(conn):
         run_total = r["full_payment"] + r["installment_1"] + r["installment_6"]
         running_total += run_total
         summary_rows.append({
+            "run_id": run_id,
             "date_record": f"As at {_format_short_date(r['run_date'])}",
             "full_commission": r["full_payment"],
             "first_half_commission": r["installment_1"],
@@ -526,7 +533,15 @@ def _write_table(sheet, rows, start_row, title, split_group_name=None):
     return row_num + 1  # one blank row before whatever comes next
 
 
-def _write_summary_table(sheet, summary_rows, start_row):
+def _write_summary_table(sheet, summary_rows, start_row, current_run_id):
+    """
+    `current_run_id` is the commission_run this download is actually
+    for. Confirmed against the real file: every prior "As at" row in
+    this table stays plain - only the row for the run just processed
+    (and the grand total line under it, when that run is also the
+    latest one on file) gets shaded yellow, the same "newest addition"
+    meaning yellow has everywhere else in this report.
+    """
     row_num = start_row
     sheet.cell(row=row_num, column=1, value="Summary").font = _TITLE_FONT
     row_num += 2
@@ -538,6 +553,7 @@ def _write_summary_table(sheet, summary_rows, start_row):
 
     money_cols = {"Full Commission", "First Half Commission", "Second Half Commission", "Running Total"}
     for row in summary_rows:
+        is_current_run = row["run_id"] == current_run_id
         values = [
             row["date_record"], row["full_commission"], row["first_half_commission"],
             row["second_half_commission"], row["running_total"], row["remarks"],
@@ -547,6 +563,8 @@ def _write_summary_table(sheet, summary_rows, start_row):
             cell.font = _BODY_FONT
             if label in money_cols:
                 cell.number_format = _MONEY_FORMAT
+            if is_current_run:
+                cell.fill = _YELLOW_FILL
         row_num += 1
 
     if summary_rows:
@@ -557,6 +575,9 @@ def _write_summary_table(sheet, summary_rows, start_row):
         total_cell = sheet.cell(row=row_num, column=5, value=final_running_total)
         total_cell.font = _HEADER_FONT
         total_cell.number_format = _MONEY_FORMAT
+        if summary_rows[-1]["run_id"] == current_run_id:
+            label_cell.fill = _YELLOW_FILL
+            total_cell.fill = _YELLOW_FILL
         row_num += 1
 
     return row_num + 1
@@ -601,7 +622,7 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     all_sheet = workbook.active
     all_sheet.title = "All"
     next_row = _write_table(all_sheet, rows, start_row=1, title=_title_line(COMPANY_SHORT_NAME, rows, run_date))
-    _write_summary_table(all_sheet, _load_summary_rows(conn), start_row=next_row)
+    _write_summary_table(all_sheet, _load_summary_rows(conn), start_row=next_row, current_run_id=commission_run_id)
     _autosize_columns(all_sheet, column_count)
 
     # Top-level grouping is by agency_group, not raw agency_code - an

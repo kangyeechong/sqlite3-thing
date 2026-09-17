@@ -662,6 +662,62 @@ def test_summary_table_accumulates_across_multiple_runs(tmp_path):
     assert grand_total_row[4] == 4500.0
 
 
+def test_only_the_newest_summary_row_is_highlighted_yellow(tmp_path):
+    """
+    Confirmed against the real file: every prior "As at" row in the
+    Date Record table stays plain once it's been through a download -
+    only the row for whichever run this download is actually for (and
+    the grand total line under it) gets shaded yellow. History is never
+    overwritten, and yellow never spreads to rows that were already
+    there before this run.
+    """
+    db_path = _db_path(tmp_path)
+
+    day1 = datetime.date.today() - datetime.timedelta(days=20)
+    xlsx1 = tmp_path / "run1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 60025, "Customer ID": "CUST225", "Customer Name": "Customer 225",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": day1 - datetime.timedelta(days=6),
+        "Agency Code": "AC001",
+    }])
+    result1 = process_upload(db_path, str(xlsx1), run_date=day1)
+
+    day2 = datetime.date.today()
+    xlsx2 = tmp_path / "run2.xlsx"
+    build_master_report(xlsx2, [
+        {
+            "No": 1, "PO No": 60025, "Customer ID": "CUST225", "Customer Name": "Customer 225",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": day1 - datetime.timedelta(days=6),
+            "Agency Code": "AC001",
+        },
+        {
+            "No": 2, "PO No": 60026, "Customer ID": "CUST226", "Customer Name": "Customer 226",
+            "Niche/Tablet Price (RM)": 20000,
+            "Full Settlement Paid Date": day2 - datetime.timedelta(days=6),
+            "Agency Code": "AC001",
+        },
+    ])
+    result2 = process_upload(db_path, str(xlsx2), run_date=day2)
+
+    report_path = tmp_path / "report2.xlsx"
+    generate_report(db_path, result2["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["All"]
+    summary_cells = [row[0] for row in sheet.iter_rows(min_col=1, max_col=1)
+                      if row[0].value and isinstance(row[0].value, str)
+                      and (row[0].value.startswith("As at") or row[0].value.startswith("Total Sum"))]
+
+    assert len(summary_cells) == 3  # 2 "As at" rows + 1 grand total line
+    run1_cell, run2_cell, total_cell = summary_cells
+
+    assert run1_cell.fill.start_color.rgb in ("00000000", None)  # older row: untouched
+    assert run2_cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")  # this run: yellow
+    assert total_cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")  # grand total: yellow too
+
+
 def test_long_agency_codes_that_collide_after_truncation_get_distinct_sheets(tmp_path):
     """
     Excel sheet names cap at 31 chars. Two different agency codes that
