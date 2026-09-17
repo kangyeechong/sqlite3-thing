@@ -189,3 +189,17 @@ CREATE TABLE IF NOT EXISTS historical_summary_rows (
     imported_by_user        TEXT,
     source_filename         TEXT
 );
+
+-- Marks which multi-statement migrations (see app/db/connection.py)
+-- have fully completed, including any one-time data backfill - not
+-- just which columns/tables exist. A column can exist the instant its
+-- ALTER TABLE statement runs (SQLite commits DDL immediately, with no
+-- way to roll it back), but the backfill statement that has to follow
+-- it is separate DML that only becomes durable on a later commit. This
+-- table is what lets a crash between the two be detected and safely
+-- resumed on the next connection, instead of the backfill being
+-- silently skipped forever just because the column already exists.
+CREATE TABLE IF NOT EXISTS schema_migrations (
+    key        TEXT PRIMARY KEY,
+    applied_at TEXT NOT NULL
+);

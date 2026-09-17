@@ -4,6 +4,7 @@ operation a user actually triggers: "I uploaded this file, tell me
 what's newly due."
 """
 
+import contextlib
 import datetime
 import os
 
@@ -11,6 +12,19 @@ from .db.connection import get_connection, init_db
 from .importer import import_master_report
 from .commission import confirm_commission_events, load_events_for_run, process_commission_run
 from .report import generate_commission_run_report
+
+
+@contextlib.contextmanager
+def _connect(db_path):
+    """Every function below needs the same open/close-on-the-way-out
+    connection lifecycle; sharing it here means a future change to it
+    (e.g. logging, a busy_timeout) can't be missed in one function but
+    not another."""
+    conn = get_connection(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def process_upload(db_path, file_path, run_date=None, created_by_user=None):
@@ -35,8 +49,7 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
     if not os.path.exists(db_path):
         init_db(db_path)
 
-    conn = get_connection(db_path)
-    try:
+    with _connect(db_path) as conn:
         import_result = import_master_report(conn, file_path, imported_by_user=created_by_user)
 
         run_id, raised_events = process_commission_run(
@@ -48,8 +61,6 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
         )
 
         conn.commit()
-    finally:
-        conn.close()
 
     return {
         "import_result": import_result,
@@ -67,21 +78,15 @@ def generate_report(db_path, commission_run_id, output_path):
     download, so a problem can be caught before a file ever reaches
     Accounts.
     """
-    conn = get_connection(db_path)
-    try:
+    with _connect(db_path) as conn:
         return generate_commission_run_report(conn, commission_run_id, output_path)
-    finally:
-        conn.close()
 
 
 def load_review(db_path, commission_run_id):
     """Every event (pending or already confirmed) on one commission
     run, for the review-and-confirm page."""
-    conn = get_connection(db_path)
-    try:
+    with _connect(db_path) as conn:
         return load_events_for_run(conn, commission_run_id)
-    finally:
-        conn.close()
 
 
 def confirm_events(db_path, commission_run_id, event_ids, confirmed_by_user):
@@ -91,8 +96,7 @@ def confirm_events(db_path, commission_run_id, event_ids, confirmed_by_user):
     caller happens to pass) and returns how many were actually
     confirmed by this call.
     """
-    conn = get_connection(db_path)
-    try:
+    with _connect(db_path) as conn:
         valid_ids = {
             row["id"] for row in load_events_for_run(conn, commission_run_id)
             if row["id"] in event_ids
@@ -100,5 +104,3 @@ def confirm_events(db_path, commission_run_id, event_ids, confirmed_by_user):
         confirmed_count = confirm_commission_events(conn, list(valid_ids), confirmed_by_user)
         conn.commit()
         return confirmed_count
-    finally:
-        conn.close()
