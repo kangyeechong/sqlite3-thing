@@ -36,6 +36,16 @@ bp = Blueprint("web", __name__)
 _DUMMY_HASH_FOR_TIMING_SAFETY = hash_password("not-a-real-password-used-only-for-timing-safety")
 
 
+def _abort_if_run_missing(conn, run_id):
+    """Shared by review() and download() - both need the same 404
+    before doing anything else with a run id that might not exist."""
+    run_exists = conn.execute(
+        "SELECT 1 FROM commission_runs WHERE id = ?", (run_id,)
+    ).fetchone()
+    if run_exists is None:
+        abort(404, description=f"No commission run with id {run_id}.")
+
+
 @bp.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "GET":
@@ -128,11 +138,7 @@ def upload():
 def review(run_id):
     conn = get_connection(current_app.config["DB_PATH"])
     try:
-        run_exists = conn.execute(
-            "SELECT 1 FROM commission_runs WHERE id = ?", (run_id,)
-        ).fetchone()
-        if run_exists is None:
-            abort(404, description=f"No commission run with id {run_id}.")
+        _abort_if_run_missing(conn, run_id)
     finally:
         conn.close()
 
@@ -186,11 +192,7 @@ def download(run_id):
     # avoid that.
     conn = get_connection(current_app.config["DB_PATH"])
     try:
-        run_exists = conn.execute(
-            "SELECT 1 FROM commission_runs WHERE id = ?", (run_id,)
-        ).fetchone()
-        if run_exists is None:
-            abort(404, description=f"No commission run with id {run_id}.")
+        _abort_if_run_missing(conn, run_id)
 
         # Written to an in-memory buffer, not a temp file on disk - a
         # temp file would get cleaned up as soon as this function

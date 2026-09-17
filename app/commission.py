@@ -302,10 +302,21 @@ def confirm_commission_events(conn, event_ids, confirmed_by_user):
     if not event_ids:
         return 0
     now_iso = datetime.datetime.now().isoformat()
-    placeholders = ",".join("?" for _ in event_ids)
-    cursor = conn.execute(
-        f"UPDATE commission_events SET status = 'confirmed', confirmed_at = ?, "
-        f"confirmed_by_user = ? WHERE status = 'pending' AND id IN ({placeholders})",
-        (now_iso, confirmed_by_user, *event_ids),
-    )
-    return cursor.rowcount
+    event_ids = list(event_ids)
+
+    # Batched well under SQLite's default SQLITE_MAX_VARIABLE_NUMBER
+    # (999) - a "confirm all" selection on a very large run must not
+    # blow that limit and fail the whole confirm with an
+    # sqlite3.OperationalError, confirming nothing at all.
+    batch_size = 500
+    confirmed_count = 0
+    for start in range(0, len(event_ids), batch_size):
+        batch = event_ids[start : start + batch_size]
+        placeholders = ",".join("?" for _ in batch)
+        cursor = conn.execute(
+            f"UPDATE commission_events SET status = 'confirmed', confirmed_at = ?, "
+            f"confirmed_by_user = ? WHERE status = 'pending' AND id IN ({placeholders})",
+            (now_iso, confirmed_by_user, *batch),
+        )
+        confirmed_count += cursor.rowcount
+    return confirmed_count

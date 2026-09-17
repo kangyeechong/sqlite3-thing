@@ -53,6 +53,25 @@ def create_app(db_path, secret_key=None):
     # validation ever runs.
     app.config["MAX_CONTENT_LENGTH"] = 20 * 1024 * 1024
 
+    # SESSION_COOKIE_HTTPONLY defaults to True already (keeps the login
+    # cookie out of reach of any injected JS). SAMESITE is set
+    # explicitly rather than left to Flask's own default so it's a
+    # documented decision, not an accident: "Lax" still lets a plain
+    # top-level link into the tool work while blocking the cookie being
+    # sent along with a cross-site POST/embed.
+    app.config["SESSION_COOKIE_SAMESITE"] = "Lax"
+
+    # SESSION_COOKIE_SECURE makes the browser withhold the cookie over
+    # plain HTTP - correct once this is ever served over HTTPS, but
+    # today's documented deployment (run_server.py, local HTTP only)
+    # would silently break: the cookie would never come back and login
+    # would appear to fail for no visible reason. So this only turns on
+    # when explicitly opted into via SESSION_COOKIE_SECURE=true, for the
+    # day this runs behind real HTTPS.
+    app.config["SESSION_COOKIE_SECURE"] = (
+        os.environ.get("SESSION_COOKIE_SECURE", "").strip().lower() == "true"
+    )
+
     if not os.path.exists(db_path):
         init_db(db_path)
 
