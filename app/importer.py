@@ -14,7 +14,7 @@ from dataclasses import dataclass, field
 
 import openpyxl
 
-from . import parsing, rules
+from . import commission, parsing, rules
 
 # The real Master sheet has a title block in rows 1-5, headers on row 6,
 # and data from row 7 onward - confirmed against the real sample file.
@@ -130,8 +130,8 @@ def _flag_historically_accounted_commissions(conn, cutoff_iso_date):
     """
     Runs right after a sheet's trailing Date Record history is
     imported for the first time (see import_master_report) - marks
-    every trigger whose own paid-date falls on or before that
-    history's own last "As at" date as already flagged, WITHOUT
+    every trigger that would have legitimately been due on or before
+    that history's own last "As at" date as already flagged, WITHOUT
     creating a commission_event for it.
 
     Why: that money is already counted in the aggregate historical
@@ -143,25 +143,50 @@ def _flag_historically_accounted_commissions(conn, cutoff_iso_date):
     genuinely new payment that happens to be in the same file as an
     as-yet-unimported history isn't silently swallowed by it.
 
+    Deliberately reuses full_payment_is_due/installment_1_is_due/
+    installment_6_is_due (the exact same eligibility checks
+    process_commission_run itself uses) rather than a simpler
+    date-only check: those functions already refuse to flag a contract
+    with a non-positive Net Price precisely so that once staff fix the
+    underlying data, it's still eligible to be flagged correctly later
+    (see commission.py) - a flag is permanent and never gets unset
+    anywhere in this codebase, so setting one from bad or
+    not-yet-active data here would silently and permanently lose that
+    commission even after the data is corrected. Same reasoning covers
+    a cancelled/on_hold contract (status != 'active') and an At-Need
+    case still missing its inurnment date.
+
     This only ever needs to run once, the same moment the history
     itself is imported for the first time - a later upload's normal
     process_commission_run call is what picks up everything after the
     cutoff from then on.
     """
     cutoff_date = datetime.date.fromisoformat(cutoff_iso_date)
-    trigger_date_columns = {
-        "full_commission_flagged": "full_settlement_paid_date",
-        "installment_1_commission_flagged": "first_installment_paid_date",
-        "installment_6_commission_flagged": "sixth_installment_paid_date",
-    }
-    for flag_column, date_column in trigger_date_columns.items():
-        conn.execute(
-            f"""
-            UPDATE contracts SET {flag_column} = 1
-            WHERE {flag_column} = 0 AND {date_column} IS NOT NULL AND {date_column} <= ?
-            """,
-            (cutoff_date.isoformat(),),
-        )
+    candidates = conn.execute("SELECT * FROM contracts WHERE status = 'active'").fetchall()
+    for contract in candidates:
+        if commission.full_payment_is_due(contract, cutoff_date):
+            conn.execute(
+                "UPDATE contracts SET full_commission_flagged = 1 WHERE po_no = ?",
+                (contract["po_no"],),
+            )
+        if (
+            contract["first_installment_paid_date"]
+            and contract["first_installment_paid_date"] <= cutoff_iso_date
+            and commission.installment_1_is_due(contract)
+        ):
+            conn.execute(
+                "UPDATE contracts SET installment_1_commission_flagged = 1 WHERE po_no = ?",
+                (contract["po_no"],),
+            )
+        if (
+            contract["sixth_installment_paid_date"]
+            and contract["sixth_installment_paid_date"] <= cutoff_iso_date
+            and commission.installment_6_is_due(contract)
+        ):
+            conn.execute(
+                "UPDATE contracts SET installment_6_commission_flagged = 1 WHERE po_no = ?",
+                (contract["po_no"],),
+            )
 
 
 def _to_iso_date(value):

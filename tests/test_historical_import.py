@@ -30,13 +30,18 @@ def test_historical_rows_are_imported_and_shown_with_no_double_count(tmp_path):
     for.
     """
     cutoff = datetime.date(2026, 6, 5)
+    # Genuine historical data always has the settlement date safely
+    # before the "As at" date it was recognized on - the 5-day
+    # cooling-off gate has to have already cleared for the old manual
+    # process to have recognized it as due in the first place.
+    settlement_date = cutoff - datetime.timedelta(days=6)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(
         xlsx_path,
         [{
             "No": 1, "PO No": 90001, "Customer ID": "CUSTH1", "Customer Name": "Customer H1",
             "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
-            "Full Settlement Paid Date": cutoff,
+            "Full Settlement Paid Date": settlement_date,
             "Agency Code": "AC001",
         }],
         historical_summary_rows=[{
@@ -65,13 +70,14 @@ def test_historical_rows_are_imported_and_shown_with_no_double_count(tmp_path):
 
 def test_reuploading_the_same_file_does_not_duplicate_historical_rows(tmp_path):
     cutoff = datetime.date(2026, 6, 5)
+    settlement_date = cutoff - datetime.timedelta(days=6)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(
         xlsx_path,
         [{
             "No": 1, "PO No": 90002, "Customer ID": "CUSTH2", "Customer Name": "Customer H2",
             "Niche/Tablet Price (RM)": 10000,
-            "Full Settlement Paid Date": cutoff,
+            "Full Settlement Paid Date": settlement_date,
             "Agency Code": "AC001",
         }],
         historical_summary_rows=[{
@@ -104,6 +110,7 @@ def test_a_payment_after_the_historical_cutoff_is_still_detected_fresh(tmp_path)
     detection, not get silently swallowed by the historical import.
     """
     cutoff = datetime.date(2026, 6, 5)
+    settlement_date = cutoff - datetime.timedelta(days=6)
     after_cutoff = datetime.date(2026, 9, 1)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(
@@ -112,7 +119,7 @@ def test_a_payment_after_the_historical_cutoff_is_still_detected_fresh(tmp_path)
             {
                 "No": 1, "PO No": 90003, "Customer ID": "CUSTH3", "Customer Name": "Customer H3",
                 "Niche/Tablet Price (RM)": 10000,  # already in the historical total
-                "Full Settlement Paid Date": cutoff,
+                "Full Settlement Paid Date": settlement_date,
                 "Agency Code": "AC001",
             },
             {
@@ -143,17 +150,74 @@ def test_a_payment_after_the_historical_cutoff_is_still_detected_fresh(tmp_path)
     assert summary[-1]["running_total"] == 3000.0  # 1500 historical + 1500 new
 
 
+def test_bad_net_price_at_onboarding_does_not_permanently_lose_the_commission(tmp_path):
+    """
+    Regression test: a PO with a non-positive Net Price (bad source
+    data - e.g. Discount larger than Niche/Tablet Price) must NOT get
+    flagged by the historical import just because its paid-date falls
+    on or before the cutoff. A flag is permanent and never gets unset
+    anywhere in this codebase, so flagging it here - before staff have
+    even had a chance to fix the data - would silently and permanently
+    lose that commission even after the data is corrected and
+    re-uploaded. Mirrors the exact same guarantee
+    full_payment_is_due/installment_1_is_due/installment_6_is_due
+    already make on their own (see commission.py).
+    """
+    cutoff = datetime.date(2026, 6, 5)
+    settlement_date = cutoff - datetime.timedelta(days=6)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 90006, "Customer ID": "CUSTH6", "Customer Name": "Customer H6",
+            "Niche/Tablet Price (RM)": 10000,
+            "Discount (RM)": 15000,  # net_price = -5000, bad data
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date.today())
+
+    conn = get_connection(db_path)
+    flagged = conn.execute(
+        "SELECT full_commission_flagged FROM contracts WHERE po_no = 90006"
+    ).fetchone()["full_commission_flagged"]
+    conn.close()
+    assert flagged == 0  # not permanently locked out just because the data was bad
+
+    # Now staff fix the Discount and re-upload - the commission must
+    # still be raised correctly, not silently lost forever.
+    xlsx_fixed = tmp_path / "upload_fixed.xlsx"
+    build_master_report(xlsx_fixed, [{
+        "No": 1, "PO No": 90006, "Customer ID": "CUSTH6", "Customer Name": "Customer H6",
+        "Niche/Tablet Price (RM)": 10000,
+        "Discount (RM)": 0,
+        "Full Settlement Paid Date": settlement_date,
+        "Agency Code": "AC001",
+    }])
+    result = process_upload(db_path, str(xlsx_fixed), run_date=datetime.date.today())
+    raised_pos = {e["po_no"] for e in result["raised_events"]}
+    assert raised_pos == {90006}
+
+
 def test_historical_rows_only_appear_on_the_unscoped_all_view(tmp_path):
     """There's no per-agency breakdown of the sheet's own pre-existing
     history to read - only the unscoped "All" summary includes it."""
     cutoff = datetime.date(2026, 6, 5)
+    settlement_date = cutoff - datetime.timedelta(days=6)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(
         xlsx_path,
         [{
             "No": 1, "PO No": 90005, "Customer ID": "CUSTH5", "Customer Name": "Customer H5",
             "Niche/Tablet Price (RM)": 10000,
-            "Full Settlement Paid Date": cutoff,
+            "Full Settlement Paid Date": settlement_date,
             "Agency Code": "AC001",
         }],
         historical_summary_rows=[{
