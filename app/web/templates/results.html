@@ -18,8 +18,9 @@
     <p class="muted">Nothing flagged.</p>
   {% endif %}
 
-  <h2>Commission due this run</h2>
+  <h2>Newly detected this run</h2>
   {% if raised_events %}
+    <p class="muted">Nothing here is due yet - it needs your confirmation first, so it can be checked against Accounts before anything is sent out.</p>
     <table>
       <tr><th>PO No</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th></tr>
       {% for event in raised_events %}
@@ -31,7 +32,7 @@
         </tr>
       {% endfor %}
     </table>
-    <p><a class="button" href="{{ url_for('web.download', run_id=commission_run_id) }}">Download Excel report</a></p>
+    <p><a class="button" href="{{ url_for('web.review', run_id=commission_run_id) }}">Review &amp; confirm</a></p>
   {% else %}
     <p class="muted">Nothing newly due this cycle - every contract in this file either has nothing new since the last upload, or isn't eligible yet.</p>
   {% endif %}

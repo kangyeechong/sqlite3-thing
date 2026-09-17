@@ -9,7 +9,7 @@ import os
 
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
-from .commission import process_commission_run
+from .commission import confirm_commission_events, load_events_for_run, process_commission_run
 from .report import generate_commission_run_report
 
 
@@ -19,13 +19,15 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
       1. import every PO into the ledger (creates the DB if needed)
       2. determine what's newly due - full payment, installment 1, or
          installment 6
-      3. log it, mark it flagged, group it under one commission_run
+      3. log it as *pending* and mark it flagged, grouped under one
+         commission_run - detecting something is never the same as it
+         being confirmed due; see confirm_events below
 
     Returns a dict with the import result and the commission run
     result, so a caller (a future web route, or a test) can show both
-    to the user - the review flags from step 1 and the commission run
-    from step 2 are both worth a human's eyes before anything is
-    downloaded.
+    to the user - the review flags from step 1 and the newly-detected
+    (still pending) events from step 2 are both worth a human's eyes
+    before anything gets confirmed and downloaded.
     """
     if run_date is None:
         run_date = datetime.date.today()
@@ -61,11 +63,42 @@ def generate_report(db_path, commission_run_id, output_path):
     Writes the downloadable Excel report for a commission run that was
     already created by process_upload. Deliberately a separate step,
     not bundled into process_upload automatically - the intended flow
-    is: upload, review what got raised on screen, then download, so a
-    problem can be caught before a file ever reaches Accounts.
+    is: upload, review what got raised on screen, confirm it, then
+    download, so a problem can be caught before a file ever reaches
+    Accounts.
     """
     conn = get_connection(db_path)
     try:
         return generate_commission_run_report(conn, commission_run_id, output_path)
+    finally:
+        conn.close()
+
+
+def load_review(db_path, commission_run_id):
+    """Every event (pending or already confirmed) on one commission
+    run, for the review-and-confirm page."""
+    conn = get_connection(db_path)
+    try:
+        return load_events_for_run(conn, commission_run_id)
+    finally:
+        conn.close()
+
+
+def confirm_events(db_path, commission_run_id, event_ids, confirmed_by_user):
+    """
+    Confirms the chosen events (must belong to commission_run_id - an
+    id for a different run is silently ignored, not just any id the
+    caller happens to pass) and returns how many were actually
+    confirmed by this call.
+    """
+    conn = get_connection(db_path)
+    try:
+        valid_ids = {
+            row["id"] for row in load_events_for_run(conn, commission_run_id)
+            if row["id"] in event_ids
+        }
+        confirmed_count = confirm_commission_events(conn, list(valid_ids), confirmed_by_user)
+        conn.commit()
+        return confirmed_count
     finally:
         conn.close()

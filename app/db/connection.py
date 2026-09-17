@@ -26,27 +26,44 @@ _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 # never reach a database that already existed before the change.
 _MIGRATIONS = [
     ("agencies", "commission_split_type",
-     "ALTER TABLE agencies ADD COLUMN commission_split_type TEXT NOT NULL DEFAULT 'flat'"),
+     ["ALTER TABLE agencies ADD COLUMN commission_split_type TEXT NOT NULL DEFAULT 'flat'"]),
     ("contracts", "fb_lead_referred",
-     "ALTER TABLE contracts ADD COLUMN fb_lead_referred INTEGER NOT NULL DEFAULT 0"),
+     ["ALTER TABLE contracts ADD COLUMN fb_lead_referred INTEGER NOT NULL DEFAULT 0"]),
     ("commission_events", "agency_amount",
-     "ALTER TABLE commission_events ADD COLUMN agency_amount NUMERIC"),
+     ["ALTER TABLE commission_events ADD COLUMN agency_amount NUMERIC"]),
     ("commission_events", "agent_amount",
-     "ALTER TABLE commission_events ADD COLUMN agent_amount NUMERIC"),
+     ["ALTER TABLE commission_events ADD COLUMN agent_amount NUMERIC"]),
     ("agencies", "agency_group",
-     "ALTER TABLE agencies ADD COLUMN agency_group TEXT"),
+     ["ALTER TABLE agencies ADD COLUMN agency_group TEXT"]),
     ("contracts", "full_commission_paid_date",
-     "ALTER TABLE contracts ADD COLUMN full_commission_paid_date TEXT"),
+     ["ALTER TABLE contracts ADD COLUMN full_commission_paid_date TEXT"]),
     ("contracts", "installment_1_commission_paid_date",
-     "ALTER TABLE contracts ADD COLUMN installment_1_commission_paid_date TEXT"),
+     ["ALTER TABLE contracts ADD COLUMN installment_1_commission_paid_date TEXT"]),
     ("contracts", "installment_6_commission_paid_date",
-     "ALTER TABLE contracts ADD COLUMN installment_6_commission_paid_date TEXT"),
+     ["ALTER TABLE contracts ADD COLUMN installment_6_commission_paid_date TEXT"]),
+    ("commission_events", "status",
+     [
+         "ALTER TABLE commission_events ADD COLUMN status TEXT NOT NULL DEFAULT 'pending'",
+         # Every row that already existed the instant this column got
+         # added was created under the old fully-automatic system,
+         # where detection alone meant "this is due" - possibly already
+         # downloaded and sent to Accounts. Backfill exactly those rows
+         # (a fresh table has none, so this is a no-op there) as
+         # confirmed, so turning on the review-and-confirm workflow
+         # never makes an already-final commission silently disappear
+         # from a report.
+         "UPDATE commission_events SET status = 'confirmed'",
+     ]),
+    ("commission_events", "confirmed_at",
+     ["ALTER TABLE commission_events ADD COLUMN confirmed_at TEXT"]),
+    ("commission_events", "confirmed_by_user",
+     ["ALTER TABLE commission_events ADD COLUMN confirmed_by_user TEXT"]),
 ]
 
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
     existing_tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-    for table, column, alter_sql in _MIGRATIONS:
+    for table, column, statements in _MIGRATIONS:
         if table not in existing_tables:
             continue
         # PRAGMA doesn't support "?" parameter substitution, so this is
@@ -55,7 +72,8 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         # user input.
         existing_columns = {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}
         if column not in existing_columns:
-            conn.execute(alter_sql)
+            for statement in statements:
+                conn.execute(statement)
     conn.commit()
 
 

@@ -154,5 +154,17 @@ CREATE TABLE IF NOT EXISTS commission_events (
     agent_amount       NUMERIC,
     detected_at        TEXT NOT NULL,
     detected_by_user   TEXT,
-    commission_run_id  INTEGER REFERENCES commission_runs(id)
+    commission_run_id  INTEGER REFERENCES commission_runs(id),
+
+    -- 'pending': detected automatically, nothing sent to Accounts yet.
+    -- 'confirmed': a staff member reviewed it and confirmed the payment
+    -- is real - see app/web/routes.py's /review pages. Only confirmed
+    -- events show up in a downloaded report or the Date Record summary
+    -- - detection alone is never enough to treat something as due.
+    -- The *_commission_flagged columns on contracts are still set the
+    -- moment an event is detected (pending or not), so a candidate is
+    -- never raised twice just because it hasn't been confirmed yet.
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed')),
+    confirmed_at        TEXT,
+    confirmed_by_user   TEXT
 );

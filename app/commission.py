@@ -244,13 +244,18 @@ def process_commission_run(conn, as_of, run_date, source_filename, created_by_us
     run_id = run_cursor.lastrowid
 
     for event in raised:
-        conn.execute(
+        # status defaults to 'pending' in the schema too, but spelled
+        # out here since it's the whole point of this INSERT: detecting
+        # something is never the same as it being confirmed due - see
+        # confirm_commission_events, the only other place status ever
+        # changes.
+        event_cursor = conn.execute(
             """
             INSERT INTO commission_events (
                 po_no, trigger_type, trigger_date, amount,
                 agency_amount, agent_amount,
-                detected_at, detected_by_user, commission_run_id
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                detected_at, detected_by_user, commission_run_id, status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
             """,
             (
                 event["po_no"], event["trigger_type"], event["trigger_date"],
@@ -258,6 +263,49 @@ def process_commission_run(conn, as_of, run_date, source_filename, created_by_us
                 now_iso, created_by_user, run_id,
             ),
         )
+        event["id"] = event_cursor.lastrowid
         conn.execute(_FLAG_COLUMN_UPDATE_SQL[event["trigger_type"]], (event["po_no"],))
 
     return run_id, raised
+
+
+def load_events_for_run(conn, commission_run_id):
+    """
+    Every event (pending or confirmed) raised in one commission run,
+    with enough contract context for a human to recognize what they're
+    approving - the review page (app/web/routes.py) is the only caller.
+    """
+    return conn.execute(
+        """
+        SELECT e.id, e.po_no, e.trigger_type, e.trigger_date, e.amount, e.status,
+               c.agency_code, c.agent_name, cu.name AS customer_name
+        FROM commission_events e
+        JOIN contracts c ON c.po_no = e.po_no
+        LEFT JOIN customers cu ON cu.customer_id = c.customer_id
+        WHERE e.commission_run_id = ?
+        ORDER BY e.po_no
+        """,
+        (commission_run_id,),
+    ).fetchall()
+
+
+def confirm_commission_events(conn, event_ids, confirmed_by_user):
+    """
+    Marks the given commission_events as confirmed - the one action
+    that makes a detected candidate actually due. Only ever moves
+    'pending' rows to 'confirmed'; an id that's already confirmed, or
+    doesn't exist, is silently skipped rather than raising, so a
+    double-submitted form or a stale checkbox can't cause an error.
+
+    Returns how many rows were actually confirmed by this call.
+    """
+    if not event_ids:
+        return 0
+    now_iso = datetime.datetime.now().isoformat()
+    placeholders = ",".join("?" for _ in event_ids)
+    cursor = conn.execute(
+        f"UPDATE commission_events SET status = 'confirmed', confirmed_at = ?, "
+        f"confirmed_by_user = ? WHERE status = 'pending' AND id IN ({placeholders})",
+        (now_iso, confirmed_by_user, *event_ids),
+    )
+    return cursor.rowcount

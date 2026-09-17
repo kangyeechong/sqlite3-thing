@@ -11,7 +11,7 @@ import openpyxl
 import pytest
 
 from app.pipeline import process_upload, generate_report
-from tests.helpers import build_master_report
+from tests.helpers import build_master_report, confirm_all_pending
 
 
 def _db_path(tmp_path):
@@ -66,6 +66,7 @@ def test_report_has_an_all_sheet_and_a_sheet_per_agency(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -101,6 +102,7 @@ def test_a_po_with_two_triggers_in_one_run_is_a_single_row_not_two(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -140,6 +142,7 @@ def test_commission_paid_dates_are_read_back_from_the_sheet(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -171,6 +174,7 @@ def test_full_payment_row_is_shaded_green_matching_the_real_file(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -210,6 +214,7 @@ def test_balance_half_row_is_also_shaded_green_not_just_full_payment(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -247,6 +252,7 @@ def test_instalment_commission_cell_is_highlighted_yellow_not_the_whole_row(tmp_
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -287,6 +293,7 @@ def test_yellow_survives_on_a_row_that_is_also_shaded_green(tmp_path):
     assert {e["trigger_type"] for e in result["raised_events"]} == {"full_payment", "installment_1"}
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -326,6 +333,7 @@ def test_cooling_off_period_shows_expired_on_an_instalment_row_too(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -352,6 +360,7 @@ def test_cooling_off_period_is_blank_when_signature_date_is_too_recent(tmp_path)
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -385,6 +394,7 @@ def test_no_split_agency_sheet_is_one_flat_table(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -421,6 +431,7 @@ def test_splitting_agency_has_a_combined_sheet_and_separate_agent_sheets(tmp_pat
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -467,6 +478,7 @@ def test_agency_group_combines_subcodes_into_one_sheet_before_agent_sheets(tmp_p
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -514,6 +526,7 @@ def test_aw_consultancy_sheet_has_the_agency_agent_split_columns(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -581,9 +594,10 @@ def test_fb_lead_deduction_shows_amount_and_no_deduction_is_greyed_out(tmp_path)
     )
     conn.commit()
 
-    run_id, _ = commission.process_commission_run(
+    run_id, raised = commission.process_commission_run(
         conn, as_of=today, run_date=today, source_filename="test", created_by_user="test"
     )
+    commission.confirm_commission_events(conn, [e["id"] for e in raised], "test")
     conn.commit()
 
     report_path = tmp_path / "report.xlsx"
@@ -627,6 +641,7 @@ def test_report_total_matches_sum_of_commission_columns(tmp_path):
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -666,6 +681,7 @@ def test_summary_table_accumulates_across_multiple_runs(tmp_path):
         "Agency Code": "AC001",
     }])
     result1 = process_upload(db_path, str(xlsx1), run_date=day1)
+    confirm_all_pending(db_path, result1["commission_run_id"])
 
     day2 = datetime.date.today()
     xlsx2 = tmp_path / "run2.xlsx"
@@ -686,6 +702,7 @@ def test_summary_table_accumulates_across_multiple_runs(tmp_path):
     result2 = process_upload(db_path, str(xlsx2), run_date=day2)
 
     report_path = tmp_path / "report2.xlsx"
+    confirm_all_pending(db_path, result2["commission_run_id"])
     generate_report(db_path, result2["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -720,6 +737,7 @@ def test_only_the_newest_summary_row_is_highlighted_yellow(tmp_path):
         "Agency Code": "AC001",
     }])
     result1 = process_upload(db_path, str(xlsx1), run_date=day1)
+    confirm_all_pending(db_path, result1["commission_run_id"])
 
     day2 = datetime.date.today()
     xlsx2 = tmp_path / "run2.xlsx"
@@ -740,6 +758,7 @@ def test_only_the_newest_summary_row_is_highlighted_yellow(tmp_path):
     result2 = process_upload(db_path, str(xlsx2), run_date=day2)
 
     report_path = tmp_path / "report2.xlsx"
+    confirm_all_pending(db_path, result2["commission_run_id"])
     generate_report(db_path, result2["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
@@ -787,6 +806,7 @@ def test_long_agency_codes_that_collide_after_truncation_get_distinct_sheets(tmp
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
     generate_report(db_path, result["commission_run_id"], str(report_path))  # must not hang
 
     workbook = openpyxl.load_workbook(report_path)

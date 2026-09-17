@@ -6,6 +6,8 @@ so tests exercise the real importer code path, not a shortcut.
 
 import openpyxl
 
+from app.pipeline import confirm_events, load_review
+
 HEADERS = [
     "No", "PO No", "PO Date", "Signature Date", "Customer ID",
     "Customer Name", "Lot No", "Niche/Tablet Price (RM)",
@@ -65,3 +67,18 @@ def build_master_report(path, rows):
             sheet.cell(row=7 + i, column=col, value=full_row.get(header))
 
     workbook.save(path)
+
+
+def confirm_all_pending(db_path, commission_run_id):
+    """
+    Test convenience: confirms every pending event on a commission run,
+    the way a human clicking through the review page would one at a
+    time. Most existing tests were written before the review-and-
+    confirm step existed and just want "everything detected this run
+    is now due" - this is that, in one call, so they can go straight
+    from process_upload to generate_report/download the same way they
+    always did.
+    """
+    events = load_review(db_path, commission_run_id)
+    pending_ids = {e["id"] for e in events if e["status"] == "pending"}
+    confirm_events(db_path, commission_run_id, pending_ids, "test-user")

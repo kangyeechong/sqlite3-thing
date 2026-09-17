@@ -1,8 +1,9 @@
 """
 Minimal, hand-rolled CSRF protection - a random per-session token
 embedded in every form and checked on every POST. No extra dependency:
-this tool has exactly two POST forms (login, upload), not enough
-surface to justify pulling in a full CSRF library for.
+this tool has only a handful of POST forms (login, upload, confirming
+a review), not enough surface to justify pulling in a full CSRF
+library for.
 """
 
 import secrets

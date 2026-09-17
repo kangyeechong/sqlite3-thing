@@ -178,7 +178,7 @@ def _load_run_rows(conn, commission_run_id, run_date):
         JOIN contracts c ON c.po_no = e.po_no
         LEFT JOIN customers cu ON cu.customer_id = c.customer_id
         LEFT JOIN agencies a ON a.agency_code = c.agency_code
-        WHERE e.commission_run_id = ?
+        WHERE e.commission_run_id = ? AND e.status = 'confirmed'
         ORDER BY c.po_no
         """,
         (commission_run_id,),
@@ -268,6 +268,10 @@ def _load_summary_rows(conn):
     commission_runs, which already record everything needed - this is
     a new view over existing data, not new calculation logic.
 
+    Only confirmed events count - a run sitting fully pending (nothing
+    approved on its review page yet) simply doesn't produce a row here
+    yet, the same way it doesn't produce one in the main table either.
+
     Each row keeps its run_id so _write_summary_table can tell which
     row is the one just processed and highlight only that one yellow -
     confirmed against the real file: every prior "As at" row stays
@@ -278,7 +282,7 @@ def _load_summary_rows(conn):
         """
         SELECT r.id AS run_id, r.run_date, e.trigger_type, SUM(e.amount) AS total
         FROM commission_runs r
-        JOIN commission_events e ON e.commission_run_id = r.id
+        JOIN commission_events e ON e.commission_run_id = r.id AND e.status = 'confirmed'
         GROUP BY r.id, e.trigger_type
         ORDER BY r.run_date, r.id
         """
@@ -610,8 +614,10 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
         standalone sheet per individual agent, after the group sheet
 
     Raises ValueError if commission_run_id is None (nothing was newly
-    due in this upload) - there is nothing meaningful to export, and
-    that should be a clear error rather than a blank file quietly
+    due in this upload), or if this run exists but nothing on it has
+    been confirmed yet (everything detected is still sitting on the
+    review page) - either way there is nothing meaningful to export,
+    and that should be a clear error rather than a blank file quietly
     handed to Accounts.
     """
     if commission_run_id is None:
@@ -626,6 +632,11 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     run_date = run_row["run_date"]
 
     rows = _load_run_rows(conn, commission_run_id, run_date)
+    if not rows:
+        raise ValueError(
+            "Nothing confirmed on this commission run yet - review and confirm "
+            "the detected commissions before downloading."
+        )
     column_count = len(_COLUMNS)
 
     workbook = Workbook()

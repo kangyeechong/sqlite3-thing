@@ -20,7 +20,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from ..db.connection import get_connection
-from ..pipeline import process_upload
+from ..pipeline import confirm_events, load_review, process_upload
 from ..report import TRIGGER_LABELS, generate_commission_run_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
 from .csrf import validate_csrf_token
@@ -123,6 +123,59 @@ def upload():
     )
 
 
+@bp.route("/review/<int:run_id>")
+@login_required
+def review(run_id):
+    conn = get_connection(current_app.config["DB_PATH"])
+    try:
+        run_exists = conn.execute(
+            "SELECT 1 FROM commission_runs WHERE id = ?", (run_id,)
+        ).fetchone()
+        if run_exists is None:
+            abort(404, description=f"No commission run with id {run_id}.")
+    finally:
+        conn.close()
+
+    events = load_review(current_app.config["DB_PATH"], run_id)
+    pending_events = [e for e in events if e["status"] == "pending"]
+    confirmed_events = [e for e in events if e["status"] == "confirmed"]
+
+    return render_template(
+        "review.html",
+        run_id=run_id,
+        pending_events=pending_events,
+        confirmed_events=confirmed_events,
+        trigger_labels=TRIGGER_LABELS,
+    )
+
+
+@bp.route("/review/<int:run_id>/confirm", methods=["POST"])
+@login_required
+def confirm_review(run_id):
+    validate_csrf_token(request.form.get("csrf_token"))
+
+    # Checkbox values arrive as strings; anything that isn't a valid
+    # event id is simply not a valid id to confirm and gets dropped -
+    # confirm_events() only ever touches ids that both parse here AND
+    # actually belong to this run.
+    event_ids = set()
+    for raw_id in request.form.getlist("event_id"):
+        try:
+            event_ids.add(int(raw_id))
+        except ValueError:
+            continue
+
+    confirmed_count = confirm_events(
+        current_app.config["DB_PATH"], run_id, event_ids, session["user_email"]
+    )
+    if confirmed_count:
+        flash(f"Confirmed {confirmed_count} commission(s).")
+    else:
+        flash("Nothing was confirmed - select at least one row first.")
+
+    return redirect(url_for("web.review", run_id=run_id))
+
+
 @bp.route("/download/<int:run_id>")
 @login_required
 def download(run_id):
@@ -145,7 +198,13 @@ def download(run_id):
         # *after* the view function has already returned. Keeping it
         # in memory sidesteps that race entirely.
         buffer = io.BytesIO()
-        generate_commission_run_report(conn, run_id, buffer)
+        try:
+            generate_commission_run_report(conn, run_id, buffer)
+        except ValueError:
+            # Nothing confirmed yet on this run - send them to the
+            # review page to fix that, rather than a raw stack trace.
+            flash("Nothing on this run is confirmed yet - review and confirm it first.")
+            return redirect(url_for("web.review", run_id=run_id))
     finally:
         conn.close()
     buffer.seek(0)

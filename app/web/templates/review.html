@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Review Commission Run{% endblock %}
+{% block content %}
+  <h1>Review commission run #{{ run_id }}</h1>
+
+  <h2>Pending your confirmation</h2>
+  {% if pending_events %}
+    <p class="muted">These were detected automatically but nothing has been sent to Accounts yet - nothing is due, and no download is available, until you confirm them below.</p>
+    <form method="post" action="{{ url_for('web.confirm_review', run_id=run_id) }}">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+      <table>
+        <tr><th></th><th>PO No</th><th>Customer</th><th>Agency</th><th>Agent</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th></tr>
+        {% for event in pending_events %}
+          <tr>
+            <td><input type="checkbox" name="event_id" value="{{ event.id }}" checked></td>
+            <td>{{ event.po_no }}</td>
+            <td>{{ event.customer_name }}</td>
+            <td>{{ event.agency_code }}</td>
+            <td>{{ event.agent_name }}</td>
+            <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
+            <td>{{ event.trigger_date }}</td>
+            <td class="money">{{ "%.2f"|format(event.amount) }}</td>
+          </tr>
+        {% endfor %}
+      </table>
+      <button type="submit" class="button">Confirm selected</button>
+    </form>
+  {% else %}
+    <p class="muted">Nothing pending - everything detected on this run has already been confirmed.</p>
+  {% endif %}
+
+  <h2>Confirmed this run</h2>
+  {% if confirmed_events %}
+    <table>
+      <tr><th>PO No</th><th>Customer</th><th>Agency</th><th>Agent</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th></tr>
+      {% for event in confirmed_events %}
+        <tr>
+          <td>{{ event.po_no }}</td>
+          <td>{{ event.customer_name }}</td>
+          <td>{{ event.agency_code }}</td>
+          <td>{{ event.agent_name }}</td>
+          <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
+          <td>{{ event.trigger_date }}</td>
+          <td class="money">{{ "%.2f"|format(event.amount) }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+    <p><a class="button" href="{{ url_for('web.download', run_id=run_id) }}">Download Excel report</a></p>
+  {% else %}
+    <p class="muted">Nothing confirmed yet - no report to download until something is.</p>
+  {% endif %}
+
+  <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>
+{% endblock %}

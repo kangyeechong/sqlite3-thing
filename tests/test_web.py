@@ -78,6 +78,20 @@ def _upload(client, file_path, filename="upload.xlsx"):
         )
 
 
+def _confirm_all_pending(client, run_id):
+    """Loads the review page for a run and confirms every pending
+    checkbox on it - the web-layer equivalent of a human ticking every
+    box and clicking "Confirm selected"."""
+    page = client.get(f"/review/{run_id}")
+    token = re.search(rb'name="csrf_token" value="([^"]+)"', page.data).group(1).decode()
+    event_ids = [m.decode() for m in re.findall(rb'name="event_id" value="(\d+)"', page.data)]
+    return client.post(
+        f"/review/{run_id}/confirm",
+        data={"csrf_token": token, "event_id": event_ids},
+        follow_redirects=True,
+    )
+
+
 def test_upload_page_requires_login(client):
     response = client.get("/upload")
     assert response.status_code == 302
@@ -124,12 +138,14 @@ def test_logout_blocks_further_access(client):
     assert response.status_code == 302
 
 
-def test_full_flow_upload_shows_results_and_download_produces_a_real_workbook(client, tmp_path):
+def test_full_flow_upload_review_confirm_and_download_produces_a_real_workbook(client, tmp_path):
     """
     End-to-end through the actual HTTP layer, not by calling the
     pipeline functions directly: log in, upload a fake file, read the
-    rendered results page, follow the download link, and open the
-    actual bytes that come back as a real Excel workbook.
+    rendered results page, follow the review link, confirm the
+    detected commission, follow the download link, and open the actual
+    bytes that come back as a real Excel workbook. Nothing is due, and
+    no download link exists, until that confirm step happens.
     """
     _login(client)
 
@@ -148,11 +164,23 @@ def test_full_flow_upload_shows_results_and_download_produces_a_real_workbook(cl
     assert response.status_code == 200
     assert b"1500.00" in response.data  # 15% of Net Price 10,000
     assert b"Full Payment" in response.data  # trigger_labels passed into the template
-    assert b"Download Excel report" in response.data
+    assert b"Review &amp; confirm" in response.data
+    assert b"Download Excel report" not in response.data  # nothing confirmed yet
 
-    match = re.search(rb"/download/(\d+)", response.data)
+    match = re.search(rb"/review/(\d+)", response.data)
     assert match is not None
     run_id = int(match.group(1))
+
+    # Not confirmed yet - downloading now must not hand back a blank
+    # or broken file, it should bounce back to the review page.
+    premature_download = client.get(f"/download/{run_id}", follow_redirects=True)
+    assert premature_download.status_code == 200
+    assert b"confirmed" in premature_download.data.lower()
+
+    confirm_response = _confirm_all_pending(client, run_id)
+    assert confirm_response.status_code == 200
+    assert b"Confirmed 1 commission" in confirm_response.data
+    assert b"Download Excel report" in confirm_response.data
 
     download_response = client.get(f"/download/{run_id}")
     assert download_response.status_code == 200
@@ -165,7 +193,7 @@ def test_full_flow_upload_shows_results_and_download_produces_a_real_workbook(cl
     assert "AC001" in workbook.sheetnames
 
 
-def test_upload_with_nothing_due_shows_message_and_no_download_link(client, tmp_path):
+def test_upload_with_nothing_due_shows_message_and_no_review_link(client, tmp_path):
     _login(client)
 
     xlsx_path = tmp_path / "upload.xlsx"
@@ -178,7 +206,33 @@ def test_upload_with_nothing_due_shows_message_and_no_download_link(client, tmp_
 
     assert response.status_code == 200
     assert b"Nothing newly due" in response.data
-    assert b"Download Excel report" not in response.data
+    assert b"Review &amp; confirm" not in response.data
+
+
+def test_confirming_nothing_selected_leaves_it_pending(client, tmp_path):
+    _login(client)
+
+    today = datetime.date.today()
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 50004, "Customer ID": "CUSTWEB4", "Customer Name": "Web Test Customer 4",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": today - datetime.timedelta(days=6),
+        "Agency Code": "AC001",
+    }])
+    response = _upload(client, xlsx_path)
+    run_id = int(re.search(rb"/review/(\d+)", response.data).group(1))
+
+    token = _csrf_token(client, f"/review/{run_id}")
+    confirm_response = client.post(
+        f"/review/{run_id}/confirm",
+        data={"csrf_token": token},  # no event_id selected
+        follow_redirects=True,
+    )
+    assert b"Nothing was confirmed" in confirm_response.data
+
+    download_response = client.get(f"/download/{run_id}", follow_redirects=True)
+    assert b"confirmed" in download_response.data.lower()
 
 
 def test_upload_without_choosing_a_file_shows_a_clear_message(client):
