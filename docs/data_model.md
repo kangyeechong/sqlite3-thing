@@ -158,6 +158,38 @@ One row per twice-monthly cycle you actually process.
 
 Individual logins, per your original brief — no shared password.
 
+### `historical_summary_rows`
+The real Master sheet carries its own trailing "Date Record" table
+(below the PO rows) — the permanent record of every processing cycle
+that happened before this tool existed. Read once from the uploaded
+file and kept forever, so that history shows up in the tool's own
+Date Record table instead of silently starting over from zero the
+first time a real file is onboarded.
+
+| column | type | notes |
+|---|---|---|
+| id | INTEGER PK | |
+| date_record | TEXT UNIQUE | ISO date, parsed from "As at DD/MM/YYYY" |
+| full_commission | NUMERIC | |
+| first_half_commission | NUMERIC | |
+| second_half_commission | NUMERIC | |
+| remarks | TEXT | |
+| imported_at | TEXT | |
+| imported_by_user | TEXT | |
+| source_filename | TEXT | |
+
+Each date is only ever imported once (UNIQUE constraint, first import
+wins) — re-uploading the same or a later file that repeats the same
+historical rows never duplicates them. The moment a sheet's history is
+read in, every contract trigger whose own paid-date falls on or before
+that history's last "As at" date is marked flagged without a
+commission_event being created for it — that money is already counted
+in the aggregate historical total, so this tool's own fresh detection
+must not also (doubly) flag it as newly due. A paid-date strictly
+after that cutoff is untouched and still goes through normal
+detection, so a genuinely new payment sitting in the same file as an
+as-yet-unimported history isn't swallowed by it.
+
 ---
 
 ## 4. State machine

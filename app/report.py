@@ -312,11 +312,23 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     entirely. Passing neither filter (the "All" sheet's case) sums
     everything, exactly like before this existed.
 
+    The unscoped/"All" case also merges in the sheet's own pre-existing
+    "Date Record" history (historical_summary_rows - imported once from
+    the uploaded file itself, see app/importer.py) chronologically
+    alongside this tool's own tracked runs, so a real file's history
+    from before this tool ever existed carries straight through instead
+    of the running total silently starting over from zero. There's no
+    per-agency breakdown of that pre-existing history (the file never
+    had one to read), so it's left out of the agency/agent-scoped
+    calls - each of those only ever reflects what this tool itself has
+    tracked.
+
     Each row keeps its run_id so _write_summary_table can tell which
     row is the one just processed and highlight only that one yellow -
     confirmed against the real file: every prior "As at" row stays
     plain, only the newest addition (and the grand total line under
-    it) is highlighted.
+    it) is highlighted. Historical rows carry run_id=None, which never
+    matches a real commission_run_id, so they're never highlighted.
     """
     query = """
         SELECT r.id AS run_id, r.run_date, e.trigger_type, SUM(e.amount) AS total
@@ -346,20 +358,38 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
             run_order.append(run_id)
         by_run[run_id][row["trigger_type"]] = row["total"] or 0.0
 
-    running_total = 0.0
-    summary_rows = []
+    # (sort_date, run_id_or_None, full, first_half, second_half, remarks)
+    entries = []
     for run_id in run_order:
         r = by_run[run_id]
-        run_total = r["full_payment"] + r["installment_1"] + r["installment_6"]
-        running_total += run_total
+        entries.append((r["run_date"], run_id, r["full_payment"], r["installment_1"], r["installment_6"], None))
+
+    if agency_group is None and agent_name is None:
+        historical = conn.execute(
+            "SELECT date_record, full_commission, first_half_commission, second_half_commission, remarks "
+            "FROM historical_summary_rows"
+        ).fetchall()
+        for h in historical:
+            entries.append((
+                h["date_record"], None,
+                h["full_commission"], h["first_half_commission"], h["second_half_commission"],
+                h["remarks"],
+            ))
+
+    entries.sort(key=lambda e: e[0])
+
+    running_total = 0.0
+    summary_rows = []
+    for sort_date, run_id, full, first_half, second_half, remarks in entries:
+        running_total += full + first_half + second_half
         summary_rows.append({
             "run_id": run_id,
-            "date_record": f"As at {_format_short_date(r['run_date'])}",
-            "full_commission": r["full_payment"],
-            "first_half_commission": r["installment_1"],
-            "second_half_commission": r["installment_6"],
+            "date_record": f"As at {_format_short_date(sort_date)}",
+            "full_commission": full,
+            "first_half_commission": first_half,
+            "second_half_commission": second_half,
             "running_total": running_total,
-            "remarks": None,
+            "remarks": remarks,
         })
     return summary_rows
 

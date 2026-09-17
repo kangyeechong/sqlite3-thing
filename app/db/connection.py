@@ -9,15 +9,16 @@ from pathlib import Path
 
 _SCHEMA_PATH = Path(__file__).parent / "schema.sql"
 
-# Lightweight, additive-only migrations - no framework, since every
-# change so far has just been "add a new column with a default" and a
-# full migration tool would be overkill at this scale. Each entry is a
-# fixed SQL literal (never built from a variable) checked against
-# PRAGMA table_info before running, so it's safe to attempt on every
-# connection: a column that already exists is simply skipped, and a
-# table that doesn't exist yet (a brand-new, not-yet-initialized db)
-# is skipped too - schema.sql will create it with every column already
-# present, so there's nothing to migrate there.
+# Lightweight, additive-only migrations - no framework, since almost
+# every change so far has just been "add a new column with a default"
+# (_MIGRATIONS) or, occasionally, "add a whole new table"
+# (_NEW_TABLE_MIGRATIONS); a full migration tool would be overkill at
+# this scale. Each entry is a fixed SQL literal (never built from a
+# variable) checked against PRAGMA table_info / sqlite_master before
+# running, so it's safe to attempt on every connection: a column or
+# table that already exists is simply skipped. A brand-new,
+# not-yet-initialized db has nothing to migrate either way - schema.sql
+# (via init_db) creates every table with every column already present.
 #
 # IMPORTANT: this is what keeps an existing ledger.db (one a user
 # already has real data in) from hard-crashing the moment a new column
@@ -60,9 +61,34 @@ _MIGRATIONS = [
      ["ALTER TABLE commission_events ADD COLUMN confirmed_by_user TEXT"]),
 ]
 
+# For a brand-new table (not a new column on an existing one) - same
+# additive spirit as _MIGRATIONS above, just CREATE TABLE instead of
+# ALTER TABLE ADD COLUMN. Every statement here is a fixed literal.
+_NEW_TABLE_MIGRATIONS = [
+    ("historical_summary_rows", """
+        CREATE TABLE historical_summary_rows (
+            id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+            date_record             TEXT NOT NULL UNIQUE,
+            full_commission         NUMERIC NOT NULL DEFAULT 0,
+            first_half_commission   NUMERIC NOT NULL DEFAULT 0,
+            second_half_commission  NUMERIC NOT NULL DEFAULT 0,
+            remarks                 TEXT,
+            imported_at             TEXT NOT NULL,
+            imported_by_user        TEXT,
+            source_filename         TEXT
+        )
+    """),
+]
+
 
 def _run_migrations(conn: sqlite3.Connection) -> None:
     existing_tables = {row["name"] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+
+    for table, create_sql in _NEW_TABLE_MIGRATIONS:
+        if table not in existing_tables:
+            conn.execute(create_sql)
+            existing_tables.add(table)
+
     for table, column, statements in _MIGRATIONS:
         if table not in existing_tables:
             continue

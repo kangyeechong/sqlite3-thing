@@ -1,0 +1,171 @@
+"""
+The uploaded sheet carries its own trailing "Date Record" summary
+table - the permanent history of every processing cycle that happened
+before this tool existed. These tests cover reading it in, never
+duplicating it on re-upload, and never double-counting money it
+already accounts for against this tool's own fresh detection.
+
+Run with: pytest tests/test_historical_import.py -v
+"""
+
+import datetime
+
+from app.db.connection import get_connection
+from app.pipeline import process_upload
+from app.report import _load_summary_rows
+from tests.helpers import build_master_report, confirm_all_pending
+
+
+def _db_path(tmp_path):
+    return str(tmp_path / "ledger.db")
+
+
+def test_historical_rows_are_imported_and_shown_with_no_double_count(tmp_path):
+    """
+    A PO whose paid-date already falls on or before the sheet's own
+    historical cutoff must not be redetected as newly due - that money
+    is already counted in the historical total. Confirmed against the
+    real file: an onboarding upload with a full trailing history
+    detects nothing new at all, since everything is already accounted
+    for.
+    """
+    cutoff = datetime.date(2026, 6, 5)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 90001, "Customer ID": "CUSTH1", "Customer Name": "Customer H1",
+            "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
+            "Full Settlement Paid Date": cutoff,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff,
+            "full_commission": 1500.0,
+            "first_half_commission": 0.0,
+            "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=datetime.date.today())
+
+    assert result["import_result"].historical_rows_imported == 1
+    assert result["raised_events"] == []  # already accounted for historically, not newly due
+    assert result["commission_run_id"] is None
+
+    conn = get_connection(db_path)
+    summary = _load_summary_rows(conn)
+    conn.close()
+    assert len(summary) == 1
+    assert summary[0]["date_record"] == "As at 05/06/2026"
+    assert summary[0]["full_commission"] == 1500.0
+    assert summary[0]["running_total"] == 1500.0
+
+
+def test_reuploading_the_same_file_does_not_duplicate_historical_rows(tmp_path):
+    cutoff = datetime.date(2026, 6, 5)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 90002, "Customer ID": "CUSTH2", "Customer Name": "Customer H2",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": cutoff,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    result1 = process_upload(db_path, str(xlsx_path), run_date=datetime.date.today())
+    assert result1["import_result"].historical_rows_imported == 1
+
+    result2 = process_upload(db_path, str(xlsx_path), run_date=datetime.date.today())
+    assert result2["import_result"].historical_rows_imported == 0  # already there, not duplicated
+    assert result2["raised_events"] == []
+
+    conn = get_connection(db_path)
+    summary = _load_summary_rows(conn)
+    conn.close()
+    assert len(summary) == 1  # still just the one historical row, not two
+
+
+def test_a_payment_after_the_historical_cutoff_is_still_detected_fresh(tmp_path):
+    """
+    The historical cutoff only suppresses what it actually covers - a
+    PO whose paid-date falls on or before the sheet's last "As at"
+    date is already accounted for, but one dated after it is a
+    genuinely new payment (e.g. Accounts confirmed it after the old
+    spreadsheet was last updated) and must still go through normal
+    detection, not get silently swallowed by the historical import.
+    """
+    cutoff = datetime.date(2026, 6, 5)
+    after_cutoff = datetime.date(2026, 9, 1)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [
+            {
+                "No": 1, "PO No": 90003, "Customer ID": "CUSTH3", "Customer Name": "Customer H3",
+                "Niche/Tablet Price (RM)": 10000,  # already in the historical total
+                "Full Settlement Paid Date": cutoff,
+                "Agency Code": "AC001",
+            },
+            {
+                "No": 2, "PO No": 90004, "Customer ID": "CUSTH4", "Customer Name": "Customer H4",
+                "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00, genuinely new
+                "Full Settlement Paid Date": after_cutoff,
+                "Agency Code": "AC001",
+            },
+        ],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 9, 17))
+
+    assert result["import_result"].historical_rows_imported == 1
+    raised_pos = {e["po_no"] for e in result["raised_events"]}
+    assert raised_pos == {90004}  # only the genuinely new one
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    conn = get_connection(db_path)
+    summary = _load_summary_rows(conn)
+    conn.close()
+    assert len(summary) == 2
+    assert summary[-1]["running_total"] == 3000.0  # 1500 historical + 1500 new
+
+
+def test_historical_rows_only_appear_on_the_unscoped_all_view(tmp_path):
+    """There's no per-agency breakdown of the sheet's own pre-existing
+    history to read - only the unscoped "All" summary includes it."""
+    cutoff = datetime.date(2026, 6, 5)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 90005, "Customer ID": "CUSTH5", "Customer Name": "Customer H5",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": cutoff,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date.today())
+
+    conn = get_connection(db_path)
+    assert len(_load_summary_rows(conn)) == 1  # unscoped: includes the historical row
+    assert len(_load_summary_rows(conn, agency_group="AC001")) == 0  # scoped: no historical data to show
+    conn.close()

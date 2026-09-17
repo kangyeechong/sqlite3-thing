@@ -168,3 +168,24 @@ CREATE TABLE IF NOT EXISTS commission_events (
     confirmed_at        TEXT,
     confirmed_by_user   TEXT
 );
+
+-- The real Master sheet carries its own trailing "Date Record"
+-- summary table (below the PO rows) - the permanent history of every
+-- processing cycle that happened before this tool existed. Read once
+-- from the uploaded file (app/importer.py) and kept here forever, so
+-- that history shows up in the Date Record table (app/report.py)
+-- instead of the tool's own tracking silently starting from zero.
+-- One row per "As at" date - date_record is UNIQUE so re-uploading
+-- the same (or another) file that repeats the same historical rows
+-- never duplicates them; the first import of a given date wins.
+CREATE TABLE IF NOT EXISTS historical_summary_rows (
+    id                      INTEGER PRIMARY KEY AUTOINCREMENT,
+    date_record             TEXT NOT NULL UNIQUE,
+    full_commission         NUMERIC NOT NULL DEFAULT 0,
+    first_half_commission   NUMERIC NOT NULL DEFAULT 0,
+    second_half_commission  NUMERIC NOT NULL DEFAULT 0,
+    remarks                 TEXT,
+    imported_at             TEXT NOT NULL,
+    imported_by_user        TEXT,
+    source_filename         TEXT
+);

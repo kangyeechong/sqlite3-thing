@@ -8,6 +8,8 @@ deliberately not parsed here.
 """
 
 import datetime
+import os
+import re
 from dataclasses import dataclass, field
 
 import openpyxl
@@ -20,6 +22,12 @@ from . import parsing, rules
 # containing "PO No", so a sheet with an extra or missing blank row
 # doesn't silently misread everything as garbage.
 _REQUIRED_HEADERS = ("No", "PO No", "Customer ID")
+
+# The trailing "Date Record" summary table's data rows look like
+# "As at 05/06/2026" - confirmed against the real file. Matched with a
+# regex (not a fixed column position) since where this table starts
+# horizontally shifts with the layout.
+_DATE_RECORD_PATTERN = re.compile(r"^As at (\d{2})/(\d{2})/(\d{4})$")
 
 
 @dataclass
@@ -35,6 +43,12 @@ class ImportResult:
     contracts_new: int = 0
     contracts_updated: int = 0
     review_flags: list = field(default_factory=list)
+    # How many rows of the sheet's own trailing "Date Record" history
+    # were newly imported this time - 0 on every upload after the
+    # first (each date only ever gets imported once, see
+    # historical_summary_rows.date_record's UNIQUE constraint), not an
+    # error or something to re-derive.
+    historical_rows_imported: int = 0
 
 
 def _find_header_row(sheet):
@@ -55,6 +69,99 @@ def _is_master_shaped(sheet):
         return True
     except ValueError:
         return False
+
+
+def _find_date_record_header(sheet):
+    """
+    Locates the "DATE RECORD" cell of the sheet's own trailing summary
+    table - confirmed against the real file, it sits well to the right
+    of the PO columns (around column K), not at column A, and its
+    exact column shifts with the layout, so every cell is checked
+    rather than assuming a fixed position. Returns (row, column), or
+    (None, None) if this sheet has no such table (a smaller test
+    fixture, for instance - not every upload will have one).
+    """
+    for row in sheet.iter_rows():
+        for cell in row:
+            if cell.value == "DATE RECORD":
+                return cell.row, cell.column
+    return None, None
+
+
+def _read_historical_summary_rows(sheet):
+    """
+    Reads the sheet's own trailing "Date Record" summary table - the
+    permanent record of every processing cycle that happened before
+    this tool existed. Returns a list of dicts (date_record as an ISO
+    date string, the three commission figures, remarks) in whatever
+    order they appear on the sheet.
+
+    Deliberately does NOT read the Running Total column - that number
+    is always recomputed fresh from whatever's actually on file (see
+    report._load_summary_rows), never trusted as a cached figure that
+    could go stale.
+    """
+    header_row, header_col = _find_date_record_header(sheet)
+    if header_row is None:
+        return []
+
+    rows = []
+    row_num = header_row + 1
+    while True:
+        label = sheet.cell(row=row_num, column=header_col).value
+        if not isinstance(label, str):
+            break
+        match = _DATE_RECORD_PATTERN.match(label.strip())
+        if not match:
+            break  # e.g. the "Total Sum of Commission Payout..." row right after
+        day, month, year = match.groups()
+        rows.append({
+            "date_record": datetime.date(int(year), int(month), int(day)).isoformat(),
+            "full_commission": _to_number(sheet.cell(row=row_num, column=header_col + 1).value) or 0.0,
+            "first_half_commission": _to_number(sheet.cell(row=row_num, column=header_col + 2).value) or 0.0,
+            "second_half_commission": _to_number(sheet.cell(row=row_num, column=header_col + 3).value) or 0.0,
+            "remarks": sheet.cell(row=row_num, column=header_col + 5).value,
+        })
+        row_num += 1
+    return rows
+
+
+def _flag_historically_accounted_commissions(conn, cutoff_iso_date):
+    """
+    Runs right after a sheet's trailing Date Record history is
+    imported for the first time (see import_master_report) - marks
+    every trigger whose own paid-date falls on or before that
+    history's own last "As at" date as already flagged, WITHOUT
+    creating a commission_event for it.
+
+    Why: that money is already counted in the aggregate historical
+    total just imported. Without this, process_commission_run (which
+    runs right after, in the same upload) would see these same PO's
+    paid-dates for the first time ever and detect them as newly due
+    too - double-counting real money. A paid-date strictly AFTER the
+    cutoff is left alone and still goes through normal detection, so a
+    genuinely new payment that happens to be in the same file as an
+    as-yet-unimported history isn't silently swallowed by it.
+
+    This only ever needs to run once, the same moment the history
+    itself is imported for the first time - a later upload's normal
+    process_commission_run call is what picks up everything after the
+    cutoff from then on.
+    """
+    cutoff_date = datetime.date.fromisoformat(cutoff_iso_date)
+    trigger_date_columns = {
+        "full_commission_flagged": "full_settlement_paid_date",
+        "installment_1_commission_flagged": "first_installment_paid_date",
+        "installment_6_commission_flagged": "sixth_installment_paid_date",
+    }
+    for flag_column, date_column in trigger_date_columns.items():
+        conn.execute(
+            f"""
+            UPDATE contracts SET {flag_column} = 1
+            WHERE {flag_column} = 0 AND {date_column} IS NOT NULL AND {date_column} <= ?
+            """,
+            (cutoff_date.isoformat(),),
+        )
 
 
 def _to_iso_date(value):
@@ -301,7 +408,7 @@ def _upsert_contract(conn, fields, now_iso):
     return existing is None
 
 
-def import_master_report(conn, file_path):
+def import_master_report(conn, file_path, imported_by_user=None):
     """
     Reads every sheet in the workbook that looks like a Master report
     (has the expected headers), upserts every PO into `contracts`, and
@@ -357,5 +464,44 @@ def import_master_report(conn, file_path):
             result.contracts_new += 1
         else:
             result.contracts_updated += 1
+
+    # The sheet's own trailing "Date Record" history, imported once and
+    # kept forever - see historical_summary_rows in schema.sql. Every
+    # date is only ever imported the first time it's seen (UNIQUE
+    # constraint, ON CONFLICT DO NOTHING), so re-uploading the same or
+    # a later file that repeats these same historical rows never
+    # duplicates or overwrites them - they're a permanent fact, not
+    # something re-derived on every import.
+    historical_rows = _read_historical_summary_rows(master_sheet)
+    for historical_row in historical_rows:
+        cursor = conn.execute(
+            """
+            INSERT INTO historical_summary_rows (
+                date_record, full_commission, first_half_commission,
+                second_half_commission, remarks, imported_at, imported_by_user, source_filename
+            ) VALUES (:date_record, :full_commission, :first_half_commission,
+                :second_half_commission, :remarks, :now, :imported_by_user, :source_filename)
+            ON CONFLICT(date_record) DO NOTHING
+            """,
+            {
+                **historical_row, "now": now_iso,
+                "imported_by_user": imported_by_user,
+                "source_filename": os.path.basename(file_path),
+            },
+        )
+        if cursor.rowcount:
+            result.historical_rows_imported += 1
+
+    # Whatever the sheet's history already accounts for (up to its own
+    # latest "As at" date, whether that history was just imported this
+    # time or an earlier upload already brought it in) must not also
+    # get detected as newly due below - that would double-count real
+    # money. Always uses the max of every row found on the sheet this
+    # time, not just newly-inserted ones, so a history that grows
+    # between uploads (a later file adding a newer "As at" row) still
+    # advances the cutoff correctly.
+    if historical_rows:
+        cutoff = max(row["date_record"] for row in historical_rows)
+        _flag_historically_accounted_commissions(conn, cutoff)
 
     return result

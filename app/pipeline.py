@@ -37,7 +37,7 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
 
     conn = get_connection(db_path)
     try:
-        import_result = import_master_report(conn, file_path)
+        import_result = import_master_report(conn, file_path, imported_by_user=created_by_user)
 
         run_id, raised_events = process_commission_run(
             conn,

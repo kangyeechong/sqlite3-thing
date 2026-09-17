@@ -45,11 +45,18 @@ _ROW_DEFAULTS = {
 }
 
 
-def build_master_report(path, rows):
+def build_master_report(path, rows, historical_summary_rows=None):
     """
     rows: list of dicts, each keyed by column header (only the keys
     you care about - everything else gets a sensible default). Each
     dict must at least include "No", "PO No", and "Customer ID".
+
+    historical_summary_rows: optional list of dicts with keys
+    "date_record" (a datetime.date), "full_commission",
+    "first_half_commission", "second_half_commission" - writes the
+    sheet's own trailing "Date Record" table (starting a few columns
+    right of the PO data, matching the real file's layout) so tests
+    can exercise app.importer's historical-import path.
     """
     workbook = openpyxl.Workbook()
     sheet = workbook.active
@@ -65,6 +72,19 @@ def build_master_report(path, rows):
         full_row = {**_ROW_DEFAULTS, **row}
         for col, header in enumerate(HEADERS, start=1):
             sheet.cell(row=7 + i, column=col, value=full_row.get(header))
+
+    if historical_summary_rows:
+        header_row = 7 + len(rows) + 3  # a few blank rows after "Total", matching the real layout
+        header_col = len(HEADERS) - 3   # a few columns right of the PO data, matching the real layout
+        labels = ["DATE RECORD", "Full Commission", "First Half Commission", "Second Half Commission", "Running Total", "Remarks"]
+        for col, label in enumerate(labels, start=header_col):
+            sheet.cell(row=header_row, column=col, value=label)
+        for i, h in enumerate(historical_summary_rows):
+            row_num = header_row + 1 + i
+            sheet.cell(row=row_num, column=header_col, value=f"As at {h['date_record'].strftime('%d/%m/%Y')}")
+            sheet.cell(row=row_num, column=header_col + 1, value=h["full_commission"])
+            sheet.cell(row=row_num, column=header_col + 2, value=h["first_half_commission"])
+            sheet.cell(row=row_num, column=header_col + 3, value=h["second_half_commission"])
 
     workbook.save(path)
 

@@ -4,6 +4,9 @@
   <h1>Results</h1>
   <p>{{ import_result.contracts_seen }} contracts read from the file
      ({{ import_result.contracts_new }} new, {{ import_result.contracts_updated }} updated).</p>
+  {% if import_result.historical_rows_imported %}
+    <p class="muted">Also imported {{ import_result.historical_rows_imported }} historical Date Record entr{{ "y" if import_result.historical_rows_imported == 1 else "ies" }} already on this sheet - now part of the permanent record, kept forever.</p>
+  {% endif %}
 
   <h2>Import review panel</h2>
   {% if import_result.review_flags %}
