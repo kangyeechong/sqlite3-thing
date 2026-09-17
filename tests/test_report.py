@@ -115,6 +115,41 @@ def test_a_po_with_two_triggers_in_one_run_is_a_single_row_not_two(tmp_path):
     assert row["Balance Half Commission Paid Date"] is None
 
 
+def test_commission_paid_dates_are_read_back_from_the_sheet(tmp_path):
+    """
+    Full Commission Paid Date / 1st Half / Balance Half Paid Date are
+    Accounts' own manual entries on the real file - this tool never
+    computes or writes them, but once Accounts has filled them in and
+    the file gets re-uploaded, the report should carry that "confirmed
+    paid" status forward rather than leaving the column blank forever.
+    """
+    today = datetime.date.today()
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60027, "Customer ID": "CUST227", "Customer Name": "Customer 227",
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": today - datetime.timedelta(days=60),
+        "Sixth Instalment Paid Date": today - datetime.timedelta(days=5),
+        "1st Half Commission Paid Date": today - datetime.timedelta(days=50),
+        "Balance Half Commission Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    _, all_rows = _find_table_rows(workbook["All"])
+    row = all_rows[0]
+    assert row["Full Commission Paid Date"] is None  # Accounts never filled this one in
+    assert row["1st Half Commission Paid Date"] == (today - datetime.timedelta(days=50)).isoformat()
+    assert row["Balance Half Commission Paid Date"] == today.isoformat()
+
+
 def test_full_payment_row_is_shaded_green_matching_the_real_file(tmp_path):
     """
     Confirmed against the real sample file's actual cell formatting

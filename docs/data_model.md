@@ -111,6 +111,9 @@ One row per PO — this is the core ledger table.
 | full_settlement_paid_date | DATE, nullable | |
 | first_installment_paid_date | DATE, nullable | |
 | sixth_installment_paid_date | DATE, nullable | |
+| full_commission_paid_date | DATE, nullable | when Accounts actually sent the money — read back from the sheet on import, never written by this tool |
+| installment_1_commission_paid_date | DATE, nullable | ditto |
+| installment_6_commission_paid_date | DATE, nullable | ditto |
 | full_commission_flagged | BOOLEAN | has the 15% already been raised as due |
 | installment_1_commission_flagged | BOOLEAN | has the first 7.5% already been raised |
 | installment_6_commission_flagged | BOOLEAN | has the second 7.5% already been raised |

@@ -95,6 +95,16 @@ CREATE TABLE IF NOT EXISTS contracts (
     first_installment_paid_date  TEXT,
     sixth_installment_paid_date  TEXT,
 
+    -- When Accounts actually sent the money - filled in by hand on the
+    -- real Master Report, never computed by this tool. Read back from
+    -- the sheet on import (like every other date column) so a later
+    -- upload, once Accounts has filled these in, carries "confirmed
+    -- paid" status into the next report - this tool never writes to
+    -- these itself.
+    full_commission_paid_date          TEXT,
+    installment_1_commission_paid_date TEXT,
+    installment_6_commission_paid_date TEXT,
+
     -- Has this trigger already been raised as a commission_event, ever?
     -- Checking this flag before raising a new event is what makes "if
     -- nothing new was crossed, nothing happens" literal rather than

@@ -169,6 +169,8 @@ def _load_run_rows(conn, commission_run_id, run_date):
             c.full_settlement_paid_date, c.first_installment_paid_date,
             c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
             c.fb_lead_referred,
+            c.full_commission_paid_date, c.installment_1_commission_paid_date,
+            c.installment_6_commission_paid_date,
             cu.name AS customer_name,
             a.splits_by_agent, a.agency_group, a.commission_split_type,
             e.trigger_type, e.amount, e.agency_amount, e.agent_amount
@@ -200,13 +202,17 @@ def _load_run_rows(conn, commission_run_id, run_date):
                 "cooling_off_period": _cooling_off_status(r["signature_date"], run_date),
                 "full_settlement_paid_date": None,
                 "full_payment_commission": None,
-                "full_commission_paid_date": None,  # filled in later by Accounts, never by this tool
+                # Accounts fills these in by hand on the real file once
+                # they've actually sent the money - read back from
+                # whatever the most recent upload had on file, never
+                # computed or written by this tool.
+                "full_commission_paid_date": r["full_commission_paid_date"],
                 "first_installment_paid_date": None,
                 "installment_1_commission": None,
-                "installment_1_commission_paid_date": None,  # ditto
+                "installment_1_commission_paid_date": r["installment_1_commission_paid_date"],
                 "sixth_installment_paid_date": None,
                 "installment_6_commission": None,
-                "installment_6_commission_paid_date": None,  # ditto
+                "installment_6_commission_paid_date": r["installment_6_commission_paid_date"],
                 "agent_name": r["agent_name"] or "(unassigned)",
                 "agency_code": r["agency_code"] or "(No Agency)",
                 # Several agency_codes can share one real-world agency

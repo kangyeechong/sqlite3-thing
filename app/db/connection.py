@@ -35,6 +35,12 @@ _MIGRATIONS = [
      "ALTER TABLE commission_events ADD COLUMN agent_amount NUMERIC"),
     ("agencies", "agency_group",
      "ALTER TABLE agencies ADD COLUMN agency_group TEXT"),
+    ("contracts", "full_commission_paid_date",
+     "ALTER TABLE contracts ADD COLUMN full_commission_paid_date TEXT"),
+    ("contracts", "installment_1_commission_paid_date",
+     "ALTER TABLE contracts ADD COLUMN installment_1_commission_paid_date TEXT"),
+    ("contracts", "installment_6_commission_paid_date",
+     "ALTER TABLE contracts ADD COLUMN installment_6_commission_paid_date TEXT"),
 ]
 
 

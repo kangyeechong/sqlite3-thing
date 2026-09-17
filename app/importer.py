@@ -140,6 +140,11 @@ def _build_contract_fields(raw_row):
         "full_settlement_paid_date": _to_iso_date(raw_row.get("Full Settlement Paid Date")),
         "first_installment_paid_date": _to_iso_date(raw_row.get("First Instalment Paid Date")),
         "sixth_installment_paid_date": _to_iso_date(raw_row.get("Sixth Instalment Paid Date")),
+        # Accounts fills these in by hand once they've actually sent the
+        # money - this tool only ever reads them back, never writes them.
+        "full_commission_paid_date": _to_iso_date(raw_row.get("Full Commission Paid Date")),
+        "installment_1_commission_paid_date": _to_iso_date(raw_row.get("1st Half Commission Paid Date")),
+        "installment_6_commission_paid_date": _to_iso_date(raw_row.get("Balance Half Commission Paid Date")),
         "remarks": remarks,
     }
 
@@ -253,13 +258,19 @@ def _upsert_contract(conn, fields, now_iso):
             po_date, signature_date, niche_price, promotion, discount,
             net_price, case_type, inurnment_date, status,
             full_settlement_paid_date, first_installment_paid_date,
-            sixth_installment_paid_date, remarks, updated_at
+            sixth_installment_paid_date,
+            full_commission_paid_date, installment_1_commission_paid_date,
+            installment_6_commission_paid_date,
+            remarks, updated_at
         ) VALUES (
             :po_no, :customer_id, :agent_name, :agency_code, :lot_no,
             :po_date, :signature_date, :niche_price, :promotion, :discount,
             :net_price, :case_type, :inurnment_date, :status,
             :full_settlement_paid_date, :first_installment_paid_date,
-            :sixth_installment_paid_date, :remarks, :now
+            :sixth_installment_paid_date,
+            :full_commission_paid_date, :installment_1_commission_paid_date,
+            :installment_6_commission_paid_date,
+            :remarks, :now
         )
         ON CONFLICT(po_no) DO UPDATE SET
             customer_id = excluded.customer_id,
@@ -278,6 +289,9 @@ def _upsert_contract(conn, fields, now_iso):
             full_settlement_paid_date = excluded.full_settlement_paid_date,
             first_installment_paid_date = excluded.first_installment_paid_date,
             sixth_installment_paid_date = excluded.sixth_installment_paid_date,
+            full_commission_paid_date = excluded.full_commission_paid_date,
+            installment_1_commission_paid_date = excluded.installment_1_commission_paid_date,
+            installment_6_commission_paid_date = excluded.installment_6_commission_paid_date,
             remarks = excluded.remarks,
             updated_at = excluded.updated_at
         """,
