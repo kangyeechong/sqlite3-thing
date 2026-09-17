@@ -775,6 +775,56 @@ def test_only_the_newest_summary_row_is_highlighted_yellow(tmp_path):
     assert total_cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")  # grand total: yellow too
 
 
+def _summary_grand_total(sheet):
+    for row in sheet.iter_rows(values_only=True):
+        if row[0] and isinstance(row[0], str) and row[0].startswith("Total Sum"):
+            return row[4]
+    return None
+
+
+def test_every_sheet_gets_its_own_date_record_scoped_to_itself(tmp_path):
+    """
+    Confirmed against the real file: XEMP's own sheet has a Date Record
+    table totaling RM33,070.50 - a genuine subset of the "All" sheet's
+    combined total, not the same table repeated everywhere. Each
+    agency's sheet must show only its own commissions, not bleed in
+    another agency's numbers.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60028, "Customer ID": "CUST228", "Customer Name": "Customer 228",
+            "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        },
+        {
+            "No": 2, "PO No": 60029, "Customer ID": "CUST229", "Customer Name": "Customer 229",
+            "Niche/Tablet Price (RM)": 20000,  # 15% = 3000.00
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC210", "FCC/Agent": "Agent Beta",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert _summary_grand_total(workbook["All"]) == 4500.0       # 1500 + 3000, everyone
+    assert _summary_grand_total(workbook["AC001"]) == 1500.0     # only its own PO
+    assert _summary_grand_total(workbook["AC210"]) == 3000.0     # only its own PO
+    # The per-agent sheet under AC210 is scoped the same way as its
+    # group sheet, since there's only one agent in this test.
+    assert _summary_grand_total(workbook["Agent Beta"]) == 3000.0
+
+
 def test_long_agency_codes_that_collide_after_truncation_get_distinct_sheets(tmp_path):
     """
     Excel sheet names cap at 31 chars. Two different agency codes that

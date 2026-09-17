@@ -260,7 +260,7 @@ def _load_run_rows(conn, commission_run_id, run_date):
     return list(by_po.values())
 
 
-def _load_summary_rows(conn):
+def _load_summary_rows(conn, agency_group=None, agent_name=None):
     """
     Every commission run ever processed (not just this one), grouped
     and pivoted into the "Date Record" running-total table from the
@@ -272,21 +272,38 @@ def _load_summary_rows(conn):
     approved on its review page yet) simply doesn't produce a row here
     yet, the same way it doesn't produce one in the main table either.
 
+    Every sheet gets its own copy of this table, scoped to that
+    slice's own history - confirmed against the real file: XEMP's own
+    sheet (agency_group falls back to agency_code AC001, since it has
+    no group) has a running total of RM33,070.50, a real subset of the
+    RM65,493.00 grand total on the "All" sheet, not a different figure
+    entirely. Passing neither filter (the "All" sheet's case) sums
+    everything, exactly like before this existed.
+
     Each row keeps its run_id so _write_summary_table can tell which
     row is the one just processed and highlight only that one yellow -
     confirmed against the real file: every prior "As at" row stays
     plain, only the newest addition (and the grand total line under
     it) is highlighted.
     """
-    cursor = conn.execute(
-        """
+    query = """
         SELECT r.id AS run_id, r.run_date, e.trigger_type, SUM(e.amount) AS total
         FROM commission_runs r
         JOIN commission_events e ON e.commission_run_id = r.id AND e.status = 'confirmed'
-        GROUP BY r.id, e.trigger_type
-        ORDER BY r.run_date, r.id
-        """
-    )
+        JOIN contracts c ON c.po_no = e.po_no
+        LEFT JOIN agencies a ON a.agency_code = c.agency_code
+        WHERE 1=1
+    """
+    params = []
+    if agency_group is not None:
+        query += " AND COALESCE(a.agency_group, c.agency_code) = ?"
+        params.append(agency_group)
+    if agent_name is not None:
+        query += " AND COALESCE(c.agent_name, '(unassigned)') = ?"
+        params.append(agent_name)
+    query += " GROUP BY r.id, e.trigger_type ORDER BY r.run_date, r.id"
+
+    cursor = conn.execute(query, params)
 
     by_run = {}
     run_order = []
@@ -604,14 +621,21 @@ def _autosize_columns(sheet, column_count):
 
 def generate_commission_run_report(conn, commission_run_id, output_path):
     """
-    Writes the downloadable Excel file for one commission run:
+    Writes the downloadable Excel file for one commission run. Every
+    sheet gets its own Date Record summary table directly under its
+    data, scoped to that sheet's own history (confirmed against the
+    real file: XEMP's own sheet totals RM33,070.50, a genuine subset
+    of the "All" sheet's RM65,493.00, not a separate figure) - not just
+    one summary table on "All" covering everything:
       - "All" sheet: every newly-due PO in one list (the Master view),
-        followed by the cumulative Date Record summary table covering
-        every run ever processed
+        followed by the Date Record summary covering every run ever
+        processed
       - one combined sheet per agency GROUP (everyone sharing that
-        group's rows together)
+        group's rows together), followed by a Date Record scoped to
+        just that group
       - for any group with splits_by_agent on, one additional
-        standalone sheet per individual agent, after the group sheet
+        standalone sheet per individual agent, after the group sheet,
+        each with its own Date Record scoped to just that agent
 
     Raises ValueError if commission_run_id is None (nothing was newly
     due in this upload), or if this run exists but nothing on it has
@@ -669,9 +693,13 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
         # agency/agent split columns to the right of the main table;
         # every other agency's sheet stays exactly as before.
         is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
-        _write_table(
+        group_next_row = _write_table(
             sheet, group_rows, start_row=1, title=_title_line(group_name, group_rows, run_date),
             split_group_name=group_name if is_split_group else None,
+        )
+        _write_summary_table(
+            sheet, _load_summary_rows(conn, agency_group=group_name),
+            start_row=group_next_row, current_run_id=commission_run_id,
         )
         _autosize_columns(sheet, split_column_count if is_split_group else column_count)
 
@@ -690,9 +718,13 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
                 used_titles.add(agent_sheet_title)
                 agent_sheet = workbook.create_sheet(agent_sheet_title)
                 is_split_agent = any(row["commission_split_type"] == "agency_agent_split" for row in agent_rows)
-                _write_table(
+                agent_next_row = _write_table(
                     agent_sheet, agent_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date),
                     split_group_name=group_name if is_split_agent else None,
+                )
+                _write_summary_table(
+                    agent_sheet, _load_summary_rows(conn, agency_group=group_name, agent_name=agent_name),
+                    start_row=agent_next_row, current_run_id=commission_run_id,
                 )
                 _autosize_columns(agent_sheet, split_column_count if is_split_agent else column_count)
 
