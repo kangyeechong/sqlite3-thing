@@ -27,7 +27,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from app import rules
+from app import commission, rules
 
 _BODY_FONT = Font(name="Arial", size=11)
 _HEADER_FONT = Font(name="Arial", size=11, bold=True)
@@ -52,6 +52,15 @@ _GREEN_FILL = PatternFill(start_color="C6DEB5", end_color="C6DEB5", fill_type="s
 # at all. There's nothing to paint beige until/unless the report
 # becomes a full status listing rather than a due-items list - that's
 # a bigger design question, not a missing color constant.
+
+# Marks the FB-lead-deduction cell in the agency/agent split columns
+# (see _write_agency_agent_split_columns) when a row's relevant trigger
+# fired but fb_lead_referred is off, i.e. "this slot exists, nothing
+# was deducted here". Approximated from a screenshot, not an actual
+# .xlsx file this time (unlike green/yellow/beige, which were matched
+# against real file bytes) - flag if the shade needs adjusting once
+# there's a real file with an FB-lead deduction to check against.
+_GREY_FILL = PatternFill(start_color="BFBFBF", end_color="BFBFBF", fill_type="solid")
 
 COMPANY_SHORT_NAME = "XEKL"
 
@@ -159,9 +168,10 @@ def _load_run_rows(conn, commission_run_id, run_date):
             c.niche_price, c.promotion, c.discount, c.net_price,
             c.full_settlement_paid_date, c.first_installment_paid_date,
             c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
+            c.fb_lead_referred,
             cu.name AS customer_name,
-            a.splits_by_agent, a.agency_group,
-            e.trigger_type, e.amount
+            a.splits_by_agent, a.agency_group, a.commission_split_type,
+            e.trigger_type, e.amount, e.agency_amount, e.agent_amount
         FROM commission_events e
         JOIN contracts c ON c.po_no = e.po_no
         LEFT JOIN customers cu ON cu.customer_id = c.customer_id
@@ -211,17 +221,35 @@ def _load_run_rows(conn, commission_run_id, run_date):
                 # either; default to a flat listing rather than
                 # splitting by agent.
                 "splits_by_agent": bool(r["splits_by_agent"]) if r["agency_code"] else False,
+                "commission_split_type": r["commission_split_type"] or "flat",
+                "fb_lead_referred": bool(r["fb_lead_referred"]),
+                # Only populated for agency_agent_split agencies (AW
+                # Consultancy) - the per-trigger Agency/Agent split
+                # figures shown in the extra columns to the right of
+                # the main table (see _write_agency_agent_split_columns).
+                "full_payment_agency_amount": None,
+                "full_payment_agent_amount": None,
+                "installment_1_agency_amount": None,
+                "installment_1_agent_amount": None,
+                "installment_6_agency_amount": None,
+                "installment_6_agent_amount": None,
             }
         row = by_po[po_no]
         if r["trigger_type"] == "full_payment":
             row["full_settlement_paid_date"] = r["full_settlement_paid_date"]
             row["full_payment_commission"] = r["amount"]
+            row["full_payment_agency_amount"] = r["agency_amount"]
+            row["full_payment_agent_amount"] = r["agent_amount"]
         elif r["trigger_type"] == "installment_1":
             row["first_installment_paid_date"] = r["first_installment_paid_date"]
             row["installment_1_commission"] = r["amount"]
+            row["installment_1_agency_amount"] = r["agency_amount"]
+            row["installment_1_agent_amount"] = r["agent_amount"]
         elif r["trigger_type"] == "installment_6":
             row["sixth_installment_paid_date"] = r["sixth_installment_paid_date"]
             row["installment_6_commission"] = r["amount"]
+            row["installment_6_agency_amount"] = r["agency_amount"]
+            row["installment_6_agent_amount"] = r["agent_amount"]
 
     return list(by_po.values())
 
@@ -322,8 +350,111 @@ def _title_line(label, rows, run_date):
 _COLUMN_INDEX = {key: i for i, (_label, key) in enumerate(_COLUMNS, start=1)}
 _TOTAL_KEYS = ("full_payment_commission", "installment_1_commission", "installment_6_commission")
 
+# One blank column of separation, then the agency/agent split table
+# starts here - see _write_agency_agent_split_columns.
+_SPLIT_COLUMNS_START = len(_COLUMNS) + 2
 
-def _write_table(sheet, rows, start_row, title):
+# (trigger_type, real file's super-header text (its "Commissioin" typo
+# preserved on purpose - confirmed from the real file, not a mistake
+# here), FB-lead deduction %, agency %, agent %, row dict keys for the
+# agency/agent amounts) - one entry per trigger, each contributing 3
+# columns (FB deduction, Agency, Agent) to the split table.
+_SPLIT_COLUMN_GROUPS = [
+    ("full_payment", "Full Payment Commissioin (RM)",
+     rules.AW_FB_LEAD_DEDUCTION_FULL_PAYMENT_PCT, rules.AW_AGENCY_FULL_PAYMENT_PCT, rules.AW_AGENT_FULL_PAYMENT_PCT,
+     "full_payment_agency_amount", "full_payment_agent_amount"),
+    ("installment_1", "First Half Commissioin (RM)",
+     rules.AW_FB_LEAD_DEDUCTION_INSTALLMENT_PCT, rules.AW_AGENCY_INSTALLMENT_PCT, rules.AW_AGENT_INSTALLMENT_PCT,
+     "installment_1_agency_amount", "installment_1_agent_amount"),
+    ("installment_6", "Balance Half Commissioin (RM)",
+     rules.AW_FB_LEAD_DEDUCTION_INSTALLMENT_PCT, rules.AW_AGENCY_INSTALLMENT_PCT, rules.AW_AGENT_INSTALLMENT_PCT,
+     "installment_6_agency_amount", "installment_6_agent_amount"),
+]
+
+
+def _pct_label(pct):
+    """0.035 -> "3.5%", 0.07 -> "7%" - no trailing zeros, matching how
+    the real file writes these percentages in its column headers."""
+    return f"{pct * 100:g}%"
+
+
+def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_data_row, total_row, group_name):
+    """
+    Writes the extra columns the real file adds to the right of the
+    main table for an agency that splits commission between agency and
+    agent (currently AW Consultancy only - see
+    agencies.commission_split_type). One 3-column group per trigger
+    (FB-lead deduction, Agency %, Agent %); a row only gets values in
+    the group matching whichever trigger(s) actually fired for it this
+    run, exactly like the main table's own commission columns.
+
+    Row positions are passed in rather than recomputed, so this stays
+    perfectly aligned with whatever _write_table already wrote for the
+    very same rows in the very same sheet.
+    """
+    col = _SPLIT_COLUMNS_START
+    totals = {}
+    for trigger_type, super_header, deduction_pct, agency_pct, agent_pct, agency_key, agent_key in _SPLIT_COLUMN_GROUPS:
+        fb_col, agency_col, agent_col = col, col + 1, col + 2
+        totals[fb_col] = 0.0
+        totals[agency_col] = 0.0
+        totals[agent_col] = 0.0
+
+        sheet.cell(row=start_row, column=fb_col, value=super_header).font = _TITLE_FONT
+        sheet.merge_cells(start_row=start_row, start_column=fb_col, end_row=start_row, end_column=agent_col)
+
+        fb_label = f"{_pct_label(deduction_pct)} FB leads from XEKL  (to be deducted from {group_name})"
+        agency_label = f"{group_name}\n{_pct_label(agency_pct)}"
+        agent_label = f"Agent\n{_pct_label(agent_pct)}"
+        for c, label in ((fb_col, fb_label), (agency_col, agency_label), (agent_col, agent_label)):
+            cell = sheet.cell(row=header_row, column=c, value=label)
+            cell.font = _HEADER_FONT
+
+        row_num = first_data_row
+        for row in rows:
+            agency_amount = row.get(agency_key)
+            agent_amount = row.get(agent_key)
+            trigger_fired = agency_amount is not None or agent_amount is not None
+
+            fb_cell = sheet.cell(row=row_num, column=fb_col)
+            if trigger_fired:
+                deduction = _fb_deduction_amount(row["net_price"], row["fb_lead_referred"], deduction_pct)
+                fb_cell.value = deduction
+                fb_cell.number_format = _MONEY_FORMAT
+                if deduction is None:
+                    fb_cell.fill = _GREY_FILL
+                totals[fb_col] += deduction or 0.0
+
+            agency_cell = sheet.cell(row=row_num, column=agency_col, value=agency_amount)
+            agent_cell = sheet.cell(row=row_num, column=agent_col, value=agent_amount)
+            for cell in (fb_cell, agency_cell, agent_cell):
+                cell.font = _BODY_FONT
+            agency_cell.number_format = _MONEY_FORMAT
+            agent_cell.number_format = _MONEY_FORMAT
+            totals[agency_col] += agency_amount or 0.0
+            totals[agent_col] += agent_amount or 0.0
+            row_num += 1
+
+        col += 3
+
+    for c, total in totals.items():
+        cell = sheet.cell(row=total_row, column=c, value=round(total, 2))
+        cell.font = _HEADER_FONT
+        cell.number_format = _MONEY_FORMAT
+
+
+def _fb_deduction_amount(net_price, fb_lead_referred, deduction_pct):
+    """The RM amount deducted from the agency's share for an FB-lead
+    referral, or None when this sale wasn't FB-lead-referred (the
+    default - see contracts.fb_lead_referred). Recomputed here rather
+    than stored, since commission_events only stores the post-deduction
+    agency_amount, not the deduction itself."""
+    if not fb_lead_referred:
+        return None
+    return commission._calculate_commission(net_price, deduction_pct)
+
+
+def _write_table(sheet, rows, start_row, title, split_group_name=None):
     """Writes one titled table (header + data + bold total row) starting
     at start_row. Returns the next free row, so tables can be stacked."""
     row_num = start_row
@@ -336,6 +467,7 @@ def _write_table(sheet, rows, start_row, title):
         cell = sheet.cell(row=header_row, column=col, value=label)
         cell.font = _HEADER_FONT
     row_num += 1
+    first_data_row = row_num
 
     totals = {key: 0.0 for key in _TOTAL_KEYS}
     for i, row in enumerate(rows, start=1):
@@ -383,6 +515,12 @@ def _write_table(sheet, rows, start_row, title):
         cell = sheet.cell(row=row_num, column=_COLUMN_INDEX[key], value=round(totals[key], 2))
         cell.font = _HEADER_FONT
         cell.number_format = _MONEY_FORMAT
+
+    if split_group_name is not None:
+        _write_agency_agent_split_columns(
+            sheet, rows, start_row, header_row, first_data_row, row_num, split_group_name
+        )
+
     row_num += 1
 
     return row_num + 1  # one blank row before whatever comes next
@@ -477,13 +615,23 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     for row in rows:
         groups.setdefault(row["agency_group"], []).append(row)
 
+    split_column_count = _SPLIT_COLUMNS_START + len(_SPLIT_COLUMN_GROUPS) * 3 - 1
+
     used_titles = {"All"}
     for group_name, group_rows in groups.items():
         sheet_title = _unique_sheet_title(group_name, used_titles)
         used_titles.add(sheet_title)
         sheet = workbook.create_sheet(sheet_title)
-        _write_table(sheet, group_rows, start_row=1, title=_title_line(group_name, group_rows, run_date))
-        _autosize_columns(sheet, column_count)
+        # AW Consultancy (and any future agency seeded the same way -
+        # see rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT) gets the extra
+        # agency/agent split columns to the right of the main table;
+        # every other agency's sheet stays exactly as before.
+        is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
+        _write_table(
+            sheet, group_rows, start_row=1, title=_title_line(group_name, group_rows, run_date),
+            split_group_name=group_name if is_split_group else None,
+        )
+        _autosize_columns(sheet, split_column_count if is_split_group else column_count)
 
         # If any code in this group splits by agent, ALSO create a
         # separate standalone sheet per individual agent - not a
@@ -499,8 +647,12 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
                 agent_sheet_title = _unique_sheet_title(agent_name, used_titles)
                 used_titles.add(agent_sheet_title)
                 agent_sheet = workbook.create_sheet(agent_sheet_title)
-                _write_table(agent_sheet, agent_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date))
-                _autosize_columns(agent_sheet, column_count)
+                is_split_agent = any(row["commission_split_type"] == "agency_agent_split" for row in agent_rows)
+                _write_table(
+                    agent_sheet, agent_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date),
+                    split_group_name=group_name if is_split_agent else None,
+                )
+                _autosize_columns(agent_sheet, split_column_count if is_split_agent else column_count)
 
     workbook.save(output_path)
     return output_path

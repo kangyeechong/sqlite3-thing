@@ -448,6 +448,126 @@ def test_agency_group_combines_subcodes_into_one_sheet_before_agent_sheets(tmp_p
     assert {r["PO No"] for r in agent_aw2_rows} == {60019}
 
 
+def test_aw_consultancy_sheet_has_the_agency_agent_split_columns(tmp_path):
+    """
+    Confirmed against the real file: an agency_agent_split group's
+    sheet (and its per-agent sheets) get 9 extra columns to the right
+    of the main table - Full Payment/First Half/Balance Half, each
+    broken into (FB-lead deduction, Agency %, Agent %). A flat agency's
+    sheet (AC001) must NOT get these extra columns at all.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60023, "Customer ID": "CUST223", "Customer Name": "Customer 223",
+            "Niche/Tablet Price (RM)": 20000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC108-01", "FCC/Agent": "Agent AW1",
+        },
+        {
+            "No": 2, "PO No": 60024, "Customer ID": "CUST224", "Customer Name": "Customer 224",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+
+    aw_sheet = workbook["AW Consultancy"]
+    header_row_num = next(row[0].row for row in aw_sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    headers = [cell.value for cell in aw_sheet[header_row_num]]
+    assert headers[25:33] == [
+        "3% FB leads from XEKL  (to be deducted from AW Consultancy)", "AW Consultancy\n7%", "Agent\n8%",
+        "1.5% FB leads from XEKL  (to be deducted from AW Consultancy)", "AW Consultancy\n3.5%", "Agent\n4%",
+        "1.5% FB leads from XEKL  (to be deducted from AW Consultancy)", "AW Consultancy\n3.5%",
+    ]
+    super_header_row = aw_sheet[1]
+    assert super_header_row[25].value == "Full Payment Commissioin (RM)"
+
+    data_row = aw_sheet[header_row_num + 1]
+    assert data_row[26].value == 1400  # 20000 * 7%
+    assert data_row[27].value == 1600  # 20000 * 8%
+
+    total_row = aw_sheet[header_row_num + 2]
+    assert total_row[26].value == 1400
+    assert total_row[27].value == 1600
+
+    ac001_sheet = workbook["AC001"]
+    ac001_header_row_num = next(row[0].row for row in ac001_sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    ac001_headers = [cell.value for cell in ac001_sheet[ac001_header_row_num]]
+    assert len(ac001_headers) == 24  # no split columns tacked on for a flat agency
+
+
+def test_fb_lead_deduction_shows_amount_and_no_deduction_is_greyed_out(tmp_path):
+    """
+    fb_lead_referred is a purely manual flag (no Excel column for it),
+    so this test sets it directly rather than through an upload.
+    Confirmed against the real file: when set, the FB-lead deduction
+    cell shows the actual RM amount deducted from the agency's share;
+    when not set, that cell is left blank and greyed out (this shade
+    was approximated from a screenshot, not matched byte-for-byte
+    against a real .xlsx like green/yellow/beige were).
+    """
+    import app.db.connection as db_connection
+    from app import commission
+    from app.report import generate_commission_run_report
+
+    db_path = str(tmp_path / "ledger.db")
+    db_connection.init_db(db_path)
+    conn = db_connection.get_connection(db_path)
+    today = datetime.date.today()
+    settlement = (today - datetime.timedelta(days=6)).isoformat()
+
+    conn.execute(
+        "INSERT INTO agencies (agency_code, splits_by_agent, commission_split_type, agency_group) "
+        "VALUES ('AC108-01', 1, 'agency_agent_split', 'AW Consultancy')"
+    )
+    conn.execute(
+        "INSERT INTO contracts (po_no, agent_name, agency_code, net_price, case_type, status, "
+        "full_settlement_paid_date, fb_lead_referred) VALUES (93001, 'Agent AW1', 'AC108-01', "
+        "20000, 'pre_need', 'active', ?, 1)",
+        (settlement,),
+    )
+    conn.execute(
+        "INSERT INTO contracts (po_no, agent_name, agency_code, net_price, case_type, status, "
+        "full_settlement_paid_date, fb_lead_referred) VALUES (93002, 'Agent AW1', 'AC108-01', "
+        "20000, 'pre_need', 'active', ?, 0)",
+        (settlement,),
+    )
+    conn.commit()
+
+    run_id, _ = commission.process_commission_run(
+        conn, as_of=today, run_date=today, source_filename="test", created_by_user="test"
+    )
+    conn.commit()
+
+    report_path = tmp_path / "report.xlsx"
+    generate_commission_run_report(conn, run_id, str(report_path))
+    conn.close()
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AW Consultancy"]
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+
+    referred_row = sheet[header_row_num + 1]
+    assert referred_row[25].value == 600  # 20000 * 3%, deducted
+    assert referred_row[25].fill.fill_type is None
+
+    not_referred_row = sheet[header_row_num + 2]
+    assert not_referred_row[25].value is None
+    assert not_referred_row[25].fill.start_color.rgb in ("00BFBFBF", "FFBFBFBF")
+
+
 def test_report_total_matches_sum_of_commission_columns(tmp_path):
     today = datetime.date.today()
     settlement_date = today - datetime.timedelta(days=6)
