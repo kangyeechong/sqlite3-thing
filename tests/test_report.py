@@ -152,6 +152,47 @@ def test_full_payment_row_is_shaded_green_matching_the_real_file(tmp_path):
     assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
 
 
+def test_balance_half_row_is_also_shaded_green_not_just_full_payment(tmp_path):
+    """
+    Confirmed with the business: green means the PO is fully paid off
+    commission-wise, not specifically "one-off full payment" only. An
+    installment plan's Balance Half (installment 6) is its last ever
+    commission trigger - nothing more is due on that PO after this, so
+    it gets the same whole-row green as a full payment does, even
+    though no "Full Payment Commission" was ever raised on this PO.
+    """
+    today = datetime.date.today()
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60022, "Customer ID": "CUST222", "Customer Name": "Customer 222",
+        "Niche/Tablet Price (RM)": 10000,
+        "Sixth Instalment Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["All"]
+    headers, _ = _find_table_rows(sheet)
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    data_row_num = header_row_num + 1
+
+    unrelated_col = headers.index("Customer Name") + 1
+    balance_col = headers.index("Balance Half Commission (RM)") + 1
+
+    # Whole row green, including columns unrelated to the trigger itself.
+    assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
+    # The Balance Half cell itself: yellow (newly due this run) wins
+    # over the row's green, same rule as any other highlighted cell.
+    assert sheet.cell(row=data_row_num, column=balance_col).fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
+
+
 def test_instalment_commission_cell_is_highlighted_yellow_not_the_whole_row(tmp_path):
     """
     Instalments get a yellow highlight on just the specific commission

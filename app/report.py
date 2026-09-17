@@ -35,12 +35,15 @@ _TITLE_FONT = Font(name="Arial", size=13, bold=True)
 _MONEY_FORMAT = "#,##0.00"
 
 # Green matched against the real sample file's actual cell formatting
-# (not guessed): full-payment rows there use theme accent6 (#70AD47)
-# tinted 0.6, reproduced here as plain RGB (Excel's tint formula
-# applied by hand) since openpyxl's fill doesn't need to reference the
-# workbook's theme to look the same.
+# (not guessed): rows there use theme accent6 (#70AD47) tinted 0.6,
+# reproduced here as plain RGB (Excel's tint formula applied by hand)
+# since openpyxl's fill doesn't need to reference the workbook's theme
+# to look the same. Confirmed with the business: green means the PO is
+# fully paid off commission-wise, not specifically "one-off full
+# payment" - an installment plan's Balance Half (its last commission
+# trigger) gets the same whole-row green as a full payment does.
 _YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
-_GREEN_FILL = PatternFill(start_color="C6DEB5", end_color="C6DEB5", fill_type="solid")   # full payment rows
+_GREEN_FILL = PatternFill(start_color="C6DEB5", end_color="C6DEB5", fill_type="solid")   # fully paid off rows
 
 # The real file also shades cancelled/withdrawn rows a light beige
 # (theme accent2 #ED7D31 tinted 0.8, ~#FBE5D6) - confirmed, but NOT
@@ -336,14 +339,27 @@ def _write_table(sheet, rows, start_row, title):
 
     totals = {key: 0.0 for key in _TOTAL_KEYS}
     for i, row in enumerate(rows, start=1):
-        is_full_payment_row = row.get("full_payment_commission") is not None
+        # Green means the PO is fully paid off, commission-wise - either
+        # a one-off full payment, or (for an installment plan) its
+        # Balance Half, the last commission trigger that plan will ever
+        # raise. Confirmed with the business: the customer may still be
+        # paying off later installments after that (commission release
+        # is fixed at installment 1 and 6 regardless of a 6/12/18/24
+        # month plan's actual length - see rules.py), but nothing more
+        # is ever due on this PO for commission purposes once its
+        # Balance Half is paid, so it's "done" the same as a full
+        # payment is.
+        is_fully_paid_row = (
+            row.get("full_payment_commission") is not None
+            or row.get("installment_6_commission") is not None
+        )
         for col, (label, key) in enumerate(_COLUMNS, start=1):
             value = i if key == "row_no" else row.get(key)
             cell = sheet.cell(row=row_num, column=col, value=value)
             cell.font = _BODY_FONT
             if label in _MONEY_COLUMNS:
                 cell.number_format = _MONEY_FORMAT
-            if is_full_payment_row:
+            if is_fully_paid_row:
                 cell.fill = _GREEN_FILL
             # Checked with a separate `if`, not `elif` - a PO whose
             # first-ever import already has both full payment AND an
