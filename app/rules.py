@@ -76,3 +76,16 @@ AW_FB_LEAD_DEDUCTION_INSTALLMENT_PCT = 0.015
 # shows up that isn't in this list yet, rather than silently treating
 # it as a flat-commission agency.
 AGENCIES_WITH_AGENCY_AGENT_SPLIT = {"AC108-01", "AC108-02", "AC108-03"}
+
+# Which agency_codes are really sub-codes of one shared real-world
+# agency - maps agency_code -> the group name the Excel export should
+# show a combined sheet under (see agencies.agency_group in
+# schema.sql). AW Consultancy's three sub-codes all point at the same
+# "AW Consultancy" group; a code not listed here stands alone as its
+# own group (the default for every other agency). Same
+# never-overwrite-after-first-sight seeding rule as the flags above.
+AGENCY_GROUPS = {
+    "AC108-01": "AW Consultancy",
+    "AC108-02": "AW Consultancy",
+    "AC108-03": "AW Consultancy",
+}

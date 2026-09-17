@@ -234,10 +234,12 @@ def _upsert_contract(conn, fields, now_iso):
         commission_split_type = (
             "agency_agent_split" if fields["agency_code"] in rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT else "flat"
         )
+        agency_group = rules.AGENCY_GROUPS.get(fields["agency_code"])
         conn.execute(
-            "INSERT INTO agencies (agency_code, splits_by_agent, commission_split_type) VALUES (?, ?, ?) "
+            "INSERT INTO agencies (agency_code, splits_by_agent, commission_split_type, agency_group) "
+            "VALUES (?, ?, ?, ?) "
             "ON CONFLICT(agency_code) DO NOTHING",
-            (fields["agency_code"], splits_by_agent, commission_split_type),
+            (fields["agency_code"], splits_by_agent, commission_split_type, agency_group),
         )
 
     existing = conn.execute(

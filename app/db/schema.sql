@@ -36,7 +36,21 @@ CREATE TABLE IF NOT EXISTS agencies (
     -- overwritten afterward - so it's editable data, not hardcoded
     -- logic, the same reasoning as splits_by_agent above.
     commission_split_type TEXT NOT NULL DEFAULT 'flat'
-        CHECK (commission_split_type IN ('flat', 'agency_agent_split'))
+        CHECK (commission_split_type IN ('flat', 'agency_agent_split')),
+
+    -- Several agency_codes can belong to one real-world agency (AW
+    -- Consultancy's AC108-01/-02/-03 are all the same agency, just
+    -- different internal sub-codes). NULL means this code stands
+    -- alone as its own group - the default, and what every agency
+    -- except AW Consultancy currently uses. When set, the Excel
+    -- export shows one combined sheet for the whole group first
+    -- (every code's rows together, like the group's own flat view),
+    -- THEN separate per-agent sheets underneath it - matching the
+    -- real file's actual structure (an "AW Consultancy" sheet with
+    -- everyone, followed by one sheet per named agent), not jumping
+    -- straight from individual codes to individual agents with no
+    -- combined view in between.
+    agency_group TEXT
 );
 
 -- One row per PO. This is the core ledger table - its three

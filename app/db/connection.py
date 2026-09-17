@@ -33,6 +33,8 @@ _MIGRATIONS = [
      "ALTER TABLE commission_events ADD COLUMN agency_amount NUMERIC"),
     ("commission_events", "agent_amount",
      "ALTER TABLE commission_events ADD COLUMN agent_amount NUMERIC"),
+    ("agencies", "agency_group",
+     "ALTER TABLE agencies ADD COLUMN agency_group TEXT"),
 ]
 
 

@@ -11,12 +11,14 @@ docs/data_model.md section 5) still gets ONE row, not two, exactly
 like the source file would show it.
 
 Grouping mirrors how your team already splits the Master report today
-(section 6a): every agency gets its own sheet, and within an agency
-where `splits_by_agent` is on, that sheet is further broken into one
-section per agent. This is pure grouping of already-calculated flat
-commission amounts - it does not compute AW Consultancy's agency/agent
-split math, which is still a later phase (flagged separately, not
-silently skipped).
+(section 6a): every agency GROUP gets its own combined sheet first
+(several agency_codes can be sub-codes of one real-world agency, like
+AW Consultancy's AC108-01/-02/-03 - see agencies.agency_group), and
+where any code in that group has `splits_by_agent` on, separate
+standalone sheets follow, one per individual agent - matching the real
+file's actual sheet order (a combined agency sheet, then individually
+named agent sheets), not jumping straight from raw codes to per-agent
+sheets with no combined view in between.
 """
 
 import datetime
@@ -127,7 +129,7 @@ def _load_run_rows(conn, commission_run_id):
             c.full_settlement_paid_date, c.first_installment_paid_date,
             c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
             cu.name AS customer_name,
-            a.splits_by_agent,
+            a.splits_by_agent, a.agency_group,
             e.trigger_type, e.amount
         FROM commission_events e
         JOIN contracts c ON c.po_no = e.po_no
@@ -166,6 +168,13 @@ def _load_run_rows(conn, commission_run_id):
                 "installment_6_commission_paid_date": None,  # ditto
                 "agent_name": r["agent_name"] or "(unassigned)",
                 "agency_code": r["agency_code"] or "(No Agency)",
+                # Several agency_codes can share one real-world agency
+                # (AW Consultancy's AC108-01/-02/-03) - agency_group is
+                # the label the combined top-level sheet groups under.
+                # Falls back to the raw agency_code when no group is
+                # set, so every other agency still gets its own single
+                # sheet exactly as before this existed.
+                "agency_group": r["agency_group"] or r["agency_code"] or "(No Agency)",
                 "remarks": r["remarks"],
                 # No agency on file -> nothing to group by agent for
                 # either; default to a flat listing rather than
@@ -383,9 +392,10 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
       - "All" sheet: every newly-due PO in one list (the Master view),
         followed by the cumulative Date Record summary table covering
         every run ever processed
-      - one sheet per agency
-      - within an agency with splits_by_agent on, that sheet is further
-        broken into one section per agent
+      - one combined sheet per agency GROUP (everyone sharing that
+        group's rows together)
+      - for any group with splits_by_agent on, one additional
+        standalone sheet per individual agent, after the group sheet
 
     Raises ValueError if commission_run_id is None (nothing was newly
     due in this upload) - there is nothing meaningful to export, and
@@ -413,26 +423,41 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     _write_summary_table(all_sheet, _load_summary_rows(conn), start_row=next_row)
     _autosize_columns(all_sheet, column_count)
 
-    agencies = {}
+    # Top-level grouping is by agency_group, not raw agency_code - an
+    # agency with several sub-codes (AW Consultancy's AC108-01/-02/-03)
+    # gets ONE combined sheet with every code's rows together first,
+    # matching the real file's actual structure. An agency with no
+    # group set (every agency except AW Consultancy so far) falls back
+    # to its own agency_code as its "group", so it still gets exactly
+    # one sheet, same as before this existed.
+    groups = {}
     for row in rows:
-        agencies.setdefault(row["agency_code"], []).append(row)
+        groups.setdefault(row["agency_group"], []).append(row)
 
     used_titles = {"All"}
-    for agency_code, agency_rows in agencies.items():
-        sheet_title = _unique_sheet_title(agency_code, used_titles)
+    for group_name, group_rows in groups.items():
+        sheet_title = _unique_sheet_title(group_name, used_titles)
         used_titles.add(sheet_title)
         sheet = workbook.create_sheet(sheet_title)
-
-        if not agency_rows[0]["splits_by_agent"]:
-            _write_table(sheet, agency_rows, start_row=1, title=_title_line(agency_code, agency_rows, run_date))
-        else:
-            agents = {}
-            for row in agency_rows:
-                agents.setdefault(row["agent_name"], []).append(row)
-            row_num = 1
-            for agent_name, agent_rows in agents.items():
-                row_num = _write_table(sheet, agent_rows, start_row=row_num, title=agent_name)
+        _write_table(sheet, group_rows, start_row=1, title=_title_line(group_name, group_rows, run_date))
         _autosize_columns(sheet, column_count)
+
+        # If any code in this group splits by agent, ALSO create a
+        # separate standalone sheet per individual agent - not a
+        # sub-section of the combined sheet, a genuinely separate sheet
+        # in the workbook, exactly like the real file's sheet list
+        # (one "AW Consultancy" sheet, then "TAN HER JIE", "HOO CHEW
+        # YOON", etc. each as their own tab).
+        if any(row["splits_by_agent"] for row in group_rows):
+            agents = {}
+            for row in group_rows:
+                agents.setdefault(row["agent_name"], []).append(row)
+            for agent_name, agent_rows in agents.items():
+                agent_sheet_title = _unique_sheet_title(agent_name, used_titles)
+                used_titles.add(agent_sheet_title)
+                agent_sheet = workbook.create_sheet(agent_sheet_title)
+                _write_table(agent_sheet, agent_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date))
+                _autosize_columns(agent_sheet, column_count)
 
     workbook.save(output_path)
     return output_path

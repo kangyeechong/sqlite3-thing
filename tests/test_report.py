@@ -69,7 +69,11 @@ def test_report_has_an_all_sheet_and_a_sheet_per_agency(tmp_path):
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
-    assert set(workbook.sheetnames) == {"All", "AC001", "AC200"}
+    # AC001 (XEMP) never splits by agent, so it's just one sheet. AC200
+    # is a brand-new agency (defaults to splits_by_agent=True), so it
+    # gets its own combined group sheet PLUS a separate sheet for its
+    # one agent, "Agent Alpha".
+    assert set(workbook.sheetnames) == {"All", "AC001", "AC200", "Agent Alpha"}
 
     _, all_rows = _find_table_rows(workbook["All"])
     po_numbers = {r["PO No"] for r in all_rows}
@@ -254,7 +258,12 @@ def test_no_split_agency_sheet_is_one_flat_table(tmp_path):
     assert len(ac001_rows) == 2  # one flat table, both agents mixed together
 
 
-def test_splitting_agency_sheet_has_one_section_per_agent(tmp_path):
+def test_splitting_agency_has_a_combined_sheet_and_separate_agent_sheets(tmp_path):
+    """
+    An agency with splits_by_agent on gets its own combined sheet with
+    every agent's rows together FIRST, then separate standalone sheets
+    per individual agent - not sub-sections within one sheet.
+    """
     today = datetime.date.today()
     settlement_date = today - datetime.timedelta(days=6)
 
@@ -281,9 +290,63 @@ def test_splitting_agency_sheet_has_one_section_per_agent(tmp_path):
     generate_report(db_path, result["commission_run_id"], str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
-    ac210_rows = [tuple(r) for r in workbook["AC210"].iter_rows(values_only=True) if any(v is not None for v in r)]
-    agent_titles = {r[0] for r in ac210_rows if r[0] in ("Agent One", "Agent Two")}
-    assert agent_titles == {"Agent One", "Agent Two"}
+    assert set(workbook.sheetnames) == {"All", "AC210", "Agent One", "Agent Two"}
+
+    # The combined "AC210" sheet has both agents' rows together, flat.
+    _, ac210_rows = _find_table_rows(workbook["AC210"])
+    assert {r["PO No"] for r in ac210_rows} == {60007, 60008}
+
+    # Each agent also gets their own standalone sheet with just their row.
+    _, agent_one_rows = _find_table_rows(workbook["Agent One"])
+    assert {r["PO No"] for r in agent_one_rows} == {60007}
+    _, agent_two_rows = _find_table_rows(workbook["Agent Two"])
+    assert {r["PO No"] for r in agent_two_rows} == {60008}
+
+
+def test_agency_group_combines_subcodes_into_one_sheet_before_agent_sheets(tmp_path):
+    """
+    Several agency_codes can be sub-codes of one real-world agency (AW
+    Consultancy's AC108-01/-02/-03) - they must land on ONE combined
+    "AW Consultancy" sheet together, not separate AC108-01/AC108-02
+    sheets, with individual agent sheets still following after.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60018, "Customer ID": "CUST218", "Customer Name": "Customer 218",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC108-01", "FCC/Agent": "Agent AW1",
+        },
+        {
+            "No": 2, "PO No": 60019, "Customer ID": "CUST219", "Customer Name": "Customer 219",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC108-02", "FCC/Agent": "Agent AW2",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert "AC108-01" not in workbook.sheetnames
+    assert "AC108-02" not in workbook.sheetnames
+    assert set(workbook.sheetnames) == {"All", "AW Consultancy", "Agent AW1", "Agent AW2"}
+
+    _, group_rows = _find_table_rows(workbook["AW Consultancy"])
+    assert {r["PO No"] for r in group_rows} == {60018, 60019}
+
+    _, agent_aw1_rows = _find_table_rows(workbook["Agent AW1"])
+    assert {r["PO No"] for r in agent_aw1_rows} == {60018}
+    _, agent_aw2_rows = _find_table_rows(workbook["Agent AW2"])
+    assert {r["PO No"] for r in agent_aw2_rows} == {60019}
 
 
 def test_report_total_matches_sum_of_commission_columns(tmp_path):
@@ -397,13 +460,13 @@ def test_long_agency_codes_that_collide_after_truncation_get_distinct_sheets(tmp
             "No": 1, "PO No": 60013, "Customer ID": "CUST213", "Customer Name": "Customer 213",
             "Niche/Tablet Price (RM)": 10000,
             "Full Settlement Paid Date": settlement_date,
-            "Agency Code": long_code_a,
+            "Agency Code": long_code_a, "FCC/Agent": "Agent LongA",
         },
         {
             "No": 2, "PO No": 60014, "Customer ID": "CUST214", "Customer Name": "Customer 214",
             "Niche/Tablet Price (RM)": 10000,
             "Full Settlement Paid Date": settlement_date,
-            "Agency Code": long_code_b,
+            "Agency Code": long_code_b, "FCC/Agent": "Agent LongB",
         },
     ])
 
@@ -414,7 +477,10 @@ def test_long_agency_codes_that_collide_after_truncation_get_distinct_sheets(tmp
     generate_report(db_path, result["commission_run_id"], str(report_path))  # must not hang
 
     workbook = openpyxl.load_workbook(report_path)
-    assert len(workbook.sheetnames) == 3  # "All" + two distinct agency sheets
+    # "All" + two distinct (truncated/suffixed) agency group sheets +
+    # two distinct agent sheets - every name unique, nothing silently
+    # overwritten or looped forever trying to disambiguate.
+    assert len(workbook.sheetnames) == len(set(workbook.sheetnames)) == 5
 
 
 def test_generate_report_raises_clear_error_when_nothing_was_due(tmp_path):
