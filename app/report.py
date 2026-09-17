@@ -27,6 +27,8 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
+from app import rules
+
 _BODY_FONT = Font(name="Arial", size=11)
 _HEADER_FONT = Font(name="Arial", size=11, bold=True)
 _TITLE_FONT = Font(name="Arial", size=13, bold=True)
@@ -114,12 +116,38 @@ def _format_short_date(iso_date_str):
     return datetime.date.fromisoformat(iso_date_str).strftime("%d/%m/%Y")
 
 
-def _load_run_rows(conn, commission_run_id):
+def _cooling_off_status(signature_date_str, run_date):
+    """
+    "Cooling Off Period" in the real file is a general per-PO field -
+    it shows EXPIRED once COOLING_OFF_TOTAL_DAYS have passed since
+    Signature Date, on every row that has a signature date on file, no
+    matter which commission trigger (if any) brought that row into
+    this report. Confirmed against the real file: rows with an
+    instalment due, not just a full payment due, show EXPIRED too, and
+    a PO with no payment activity at all still shows EXPIRED as long
+    as it's old enough - this is unrelated to
+    COOLING_OFF_DAYS_BEFORE_RELEASE (which only gates when full
+    payment commission itself becomes releasable).
+    """
+    if not signature_date_str:
+        return None
+    signature_date = datetime.date.fromisoformat(signature_date_str)
+    as_of = run_date if isinstance(run_date, datetime.date) else datetime.date.fromisoformat(run_date)
+    if (as_of - signature_date).days >= rules.COOLING_OFF_TOTAL_DAYS:
+        return "EXPIRED"
+    return None
+
+
+def _load_run_rows(conn, commission_run_id, run_date):
     """
     Joins this run's commission_events against contracts/customers/
     agencies and collapses them to one row per PO - a PO with two
     triggers due in the same run ends up with both sets of columns
     filled on a single row, not two separate rows.
+
+    `run_date` is needed to compute each row's Cooling Off Period
+    status (EXPIRED once COOLING_OFF_TOTAL_DAYS have passed since
+    Signature Date - see _cooling_off_status).
     """
     cursor = conn.execute(
         """
@@ -156,7 +184,7 @@ def _load_run_rows(conn, commission_run_id):
                 "promotion": r["promotion"],
                 "discount": r["discount"],
                 "net_price": r["net_price"],
-                "cooling_off_period": None,
+                "cooling_off_period": _cooling_off_status(r["signature_date"], run_date),
                 "full_settlement_paid_date": None,
                 "full_payment_commission": None,
                 "full_commission_paid_date": None,  # filled in later by Accounts, never by this tool
@@ -185,7 +213,6 @@ def _load_run_rows(conn, commission_run_id):
         if r["trigger_type"] == "full_payment":
             row["full_settlement_paid_date"] = r["full_settlement_paid_date"]
             row["full_payment_commission"] = r["amount"]
-            row["cooling_off_period"] = "EXPIRED"
         elif r["trigger_type"] == "installment_1":
             row["first_installment_paid_date"] = r["first_installment_paid_date"]
             row["installment_1_commission"] = r["amount"]
@@ -413,7 +440,7 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     ).fetchone()
     run_date = run_row["run_date"]
 
-    rows = _load_run_rows(conn, commission_run_id)
+    rows = _load_run_rows(conn, commission_run_id, run_date)
     column_count = len(_COLUMNS)
 
     workbook = Workbook()

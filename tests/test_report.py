@@ -226,6 +226,64 @@ def test_yellow_survives_on_a_row_that_is_also_shaded_green(tmp_path):
     assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
 
 
+def test_cooling_off_period_shows_expired_on_an_instalment_row_too(tmp_path):
+    """
+    Confirmed against the real Master Report: Cooling Off Period is a
+    general per-PO field (EXPIRED once COOLING_OFF_TOTAL_DAYS have
+    passed since Signature Date), shown on every row old enough - not
+    just on rows where a full-payment trigger happens to fire. A PO
+    whose only trigger this run is an instalment must still show
+    EXPIRED here if its signature date is old enough.
+    """
+    today = datetime.date.today()
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60020, "Customer ID": "CUST220", "Customer Name": "Customer 220",
+        "Niche/Tablet Price (RM)": 10000,
+        "Signature Date": today - datetime.timedelta(days=60),
+        "First Instalment Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    _, all_rows = _find_table_rows(workbook["All"])
+    row = next(r for r in all_rows if r["PO No"] == 60020)
+    assert row["Cooling Off Period"] == "EXPIRED"
+
+
+def test_cooling_off_period_is_blank_when_signature_date_is_too_recent(tmp_path):
+    """The flip side: a PO signed only a few days ago hasn't cleared
+    the cooling-off window yet, so the column stays blank, not EXPIRED."""
+    today = datetime.date.today()
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60021, "Customer ID": "CUST221", "Customer Name": "Customer 221",
+        "Niche/Tablet Price (RM)": 10000,
+        "Signature Date": today - datetime.timedelta(days=2),
+        "First Instalment Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    _, all_rows = _find_table_rows(workbook["All"])
+    row = next(r for r in all_rows if r["PO No"] == 60021)
+    assert row["Cooling Off Period"] is None
+
+
 def test_no_split_agency_sheet_is_one_flat_table(tmp_path):
     """AC001 (XEMP) must not be broken down by agent - one flat table."""
     today = datetime.date.today()
