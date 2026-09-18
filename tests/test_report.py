@@ -10,6 +10,7 @@ import datetime
 import openpyxl
 import pytest
 
+from app.db.connection import get_connection
 from app.pipeline import process_upload, generate_report
 from tests.helpers import build_master_report, confirm_all_pending
 
@@ -193,6 +194,84 @@ def test_a_po_cancelled_after_confirmation_is_excluded_from_the_movement_line_to
     assert sheet.cell(row=movement_row_num, column=commission_col).value == 0  # not 750 - cancelled money isn't a payout
     cell_fill = sheet.cell(row=data_row_num, column=commission_col).fill.start_color.rgb
     assert cell_fill not in ("00FFFF00", "FFFFFF00")  # not yellow - nothing to highlight as newly due
+
+
+def test_historically_absorbed_trigger_still_shows_its_commission_amount(tmp_path):
+    """
+    Regression test: a trigger flagged as already-covered by the
+    sheet's own historical Date Record table (see
+    _flag_historically_accounted_commissions in app/importer.py) never
+    gets a commission_event, since it isn't newly due - so before this
+    fix, its commission figure vanished from the report entirely
+    (blank, not even the real historical amount the sheet itself
+    already had), and the row never got its green "fully paid" shading
+    either, since that's driven by the same figure. The amount is
+    recomputed the same way a fresh detection would (net price x the
+    fixed percentage - the same math already cross-checked against the
+    real file's own historical figures, see rules.py), not treated as
+    newly confirmed: no yellow highlight, and it must not contribute to
+    the "movement as at" line either.
+    """
+    cutoff = datetime.date(2026, 6, 5)
+    settlement_date = cutoff - datetime.timedelta(days=6)
+    after_cutoff = datetime.date(2026, 9, 1)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [
+            {
+                "No": 1, "PO No": 70010, "Customer ID": "CUSTHF1", "Customer Name": "Customer HF1",
+                "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00, already historically absorbed
+                "Full Settlement Paid Date": settlement_date,
+                "Agency Code": "AC001",
+            },
+            {
+                "No": 2, "PO No": 70011, "Customer ID": "CUSTHF2", "Customer Name": "Customer HF2",
+                "Niche/Tablet Price (RM)": 8000,  # 15% = 1200.00, genuinely new this run
+                "Full Settlement Paid Date": after_cutoff,
+                "Agency Code": "AC001",
+            },
+        ],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 9, 17))
+    assert {e["po_no"] for e in result["raised_events"]} == {70011}  # only the fresh one detected
+
+    conn = get_connection(db_path)
+    flagged = conn.execute(
+        "SELECT full_commission_flagged FROM contracts WHERE po_no = 70010"
+    ).fetchone()["full_commission_flagged"]
+    conn.close()
+    assert flagged == 1  # historically absorbed, not lost - see test_historical_import.py
+
+    confirm_all_pending(db_path, result["commission_run_id"])
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AC001"]
+    headers, rows = _find_table_rows(sheet)
+    historical_row = next(r for r in rows if r["PO No"] == 70010)
+    fresh_row = next(r for r in rows if r["PO No"] == 70011)
+    assert historical_row["Full Payment Commission (RM)"] == 1500.0  # not blank
+    assert fresh_row["Full Payment Commission (RM)"] == 1200.0
+
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    commission_col = headers.index("Full Payment Commission (RM)") + 1
+    historical_row_num = header_row_num + [r["PO No"] for r in rows].index(70010) + 1
+    po_col = headers.index("PO No") + 1
+    # Green "fully paid" shading now triggers off the historical figure too.
+    assert sheet.cell(row=historical_row_num, column=po_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
+
+    total_row_num = header_row_num + len(rows) + 1
+    movement_row_num = total_row_num + 1
+    assert sheet.cell(row=total_row_num, column=commission_col).value == 2700.0  # 1500 historical + 1200 fresh
+    assert sheet.cell(row=movement_row_num, column=commission_col).value == 1200.0  # only this run's own addition
 
 
 def test_unpaid_po_stays_visible_with_no_color(tmp_path):

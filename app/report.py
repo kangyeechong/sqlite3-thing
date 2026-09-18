@@ -30,7 +30,7 @@ sheets with no combined view in between.
 import datetime
 
 from openpyxl import Workbook
-from openpyxl.styles import Font, PatternFill
+from openpyxl.styles import Border, Font, PatternFill, Side
 from openpyxl.utils import get_column_letter
 
 from . import commission, rules
@@ -66,6 +66,14 @@ _BEIGE_FILL = PatternFill(start_color="FBE5D6", end_color="FBE5D6", fill_type="s
 # against real file bytes) - flag if the shade needs adjusting once
 # there's a real file with an FB-lead deduction to check against.
 _GREY_FILL = PatternFill(start_color="BFBFBF", end_color="BFBFBF", fill_type="solid")
+
+# The agency/agent split table is a dense block of otherwise-identical
+# money columns bolted onto the right of the main table - a thin
+# border around every cell (header and data alike) is what makes it
+# read as its own table at a glance instead of bleeding into the
+# columns next to it.
+_THIN_SIDE = Side(style="thin", color="000000")
+_THIN_BORDER = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN_SIDE)
 
 COMPANY_SHORT_NAME = "XEKL"
 
@@ -184,6 +192,8 @@ def _load_master_rows(conn, commission_run_id, run_date):
             c.full_settlement_paid_date, c.first_installment_paid_date,
             c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
             c.fb_lead_referred,
+            c.full_commission_flagged, c.installment_1_commission_flagged,
+            c.installment_6_commission_flagged,
             c.full_commission_paid_date, c.installment_1_commission_paid_date,
             c.installment_6_commission_paid_date,
             cu.name AS customer_name,
@@ -248,6 +258,12 @@ def _load_master_rows(conn, commission_run_id, run_date):
             "splits_by_agent": bool(r["splits_by_agent"]) if r["agency_code"] else False,
             "commission_split_type": r["commission_split_type"] or "flat",
             "fb_lead_referred": bool(r["fb_lead_referred"]),
+            # Used only below, to detect a trigger that's flagged but
+            # has no commission_event at all (see the historical-
+            # fallback loop right after this) - not read anywhere else.
+            "full_commission_flagged": bool(r["full_commission_flagged"]),
+            "installment_1_commission_flagged": bool(r["installment_1_commission_flagged"]),
+            "installment_6_commission_flagged": bool(r["installment_6_commission_flagged"]),
             # Only populated for agency_agent_split agencies (AW
             # Consultancy) - the per-trigger Agency/Agent split
             # figures shown in the extra columns to the right of
@@ -288,6 +304,47 @@ def _load_master_rows(conn, commission_run_id, run_date):
             row["installment_6_confirmed_this_run"] = confirmed_this_run
             row["installment_6_agency_amount"] = e["agency_amount"]
             row["installment_6_agent_amount"] = e["agent_amount"]
+
+    # A trigger can be flagged (contracts.*_commission_flagged) with no
+    # commission_event at all, pending or confirmed - that only ever
+    # happens when _flag_historically_accounted_commissions
+    # (app/importer.py) found it already covered by the sheet's own
+    # trailing "Date Record" history at import time: a fresh detection
+    # (process_commission_run) always creates a matching event in the
+    # same breath it sets the flag, so "flagged with zero events" can
+    # only mean "already accounted for before this tool ever saw it."
+    # Without a fallback here, that real, already-known commission
+    # simply vanishes from the report - no amount, no green "fully
+    # paid" shading, and (for an agency_agent_split agency) nothing in
+    # the Agency/Agent split columns either, even though the real
+    # Master Report this data came from already had it filled in by
+    # hand. Recomputed the exact same way a fresh detection would (net
+    # price x the fixed percentage, via the same commission._build_event
+    # every live detection uses) rather than read back verbatim from
+    # the sheet - for the same reason net_price itself is always
+    # recomputed rather than trusted, and already cross-checked exactly
+    # against the real file's own historical figures (see rules.py).
+    # Nothing here counts as newly confirmed: no confirmed_this_run
+    # flag gets touched, so it never highlights yellow or contributes
+    # to a "movement as at" figure.
+    has_event = {(e["po_no"], e["trigger_type"]) for e in conn.execute(
+        "SELECT DISTINCT po_no, trigger_type FROM commission_events"
+    )}
+    historical_fallback_triggers = (
+        ("full_payment", "full_commission_flagged", "full_payment_commission",
+         "full_payment_agency_amount", "full_payment_agent_amount"),
+        ("installment_1", "installment_1_commission_flagged", "installment_1_commission",
+         "installment_1_agency_amount", "installment_1_agent_amount"),
+        ("installment_6", "installment_6_commission_flagged", "installment_6_commission",
+         "installment_6_agency_amount", "installment_6_agent_amount"),
+    )
+    for row in by_po.values():
+        for trigger_type, flag_key, amount_key, agency_key, agent_key in historical_fallback_triggers:
+            if row[flag_key] and (row["po_no"], trigger_type) not in has_event:
+                fallback = commission._build_event(row, trigger_type, trigger_date=None)
+                row[amount_key] = fallback["amount"]
+                row[agency_key] = fallback["agency_amount"]
+                row[agent_key] = fallback["agent_amount"]
 
     return list(by_po.values())
 
@@ -533,8 +590,14 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
         movement_totals[agent_col] = 0.0
         confirmed_this_run_key = f"{trigger_type}_confirmed_this_run"
 
-        sheet.cell(row=start_row, column=fb_col, value=super_header).font = _TITLE_FONT
+        title_cell = sheet.cell(row=start_row, column=fb_col, value=super_header)
+        title_cell.font = _TITLE_FONT
         sheet.merge_cells(start_row=start_row, start_column=fb_col, end_row=start_row, end_column=agent_col)
+        # merge_cells only keeps the top-left cell's style, but a
+        # border still needs to be set on every cell in the merged
+        # range for the border to actually render along its full width.
+        for c in (fb_col, agency_col, agent_col):
+            sheet.cell(row=start_row, column=c).border = _THIN_BORDER
 
         fb_label = f"{_pct_label(deduction_pct)} FB leads from XEKL  (to be deducted from {group_name})"
         agency_label = f"{group_name}\n{_pct_label(agency_pct)}"
@@ -542,6 +605,7 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
         for c, label in ((fb_col, fb_label), (agency_col, agency_label), (agent_col, agent_label)):
             cell = sheet.cell(row=header_row, column=c, value=label)
             cell.font = _HEADER_FONT
+            cell.border = _THIN_BORDER
 
         row_num = first_data_row
         for row in rows:
@@ -563,6 +627,7 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
             agent_cell = sheet.cell(row=row_num, column=agent_col, value=agent_amount)
             for cell in (fb_cell, agency_cell, agent_cell):
                 cell.font = _BODY_FONT
+                cell.border = _THIN_BORDER
                 if is_cancelled_row:
                     cell.fill = _BEIGE_FILL
             agency_cell.number_format = _MONEY_FORMAT
@@ -581,6 +646,7 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
         cell = sheet.cell(row=total_row, column=c, value=round(total, 2))
         cell.font = _HEADER_FONT
         cell.number_format = _MONEY_FORMAT
+        cell.border = _THIN_BORDER
 
     # Same "movement as at" idea as the main table (_write_table) - one
     # row under the lifetime Total, showing just what THIS run added to
@@ -592,6 +658,7 @@ def _write_agency_agent_split_columns(sheet, rows, start_row, header_row, first_
         cell.font = _BODY_FONT
         cell.number_format = _MONEY_FORMAT
         cell.fill = _YELLOW_FILL
+        cell.border = _THIN_BORDER
 
 
 def _fb_deduction_amount(net_price, fb_lead_referred, deduction_pct):
@@ -890,16 +957,43 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
                 agent_sheet_title = _unique_sheet_title(agent_name, used_titles)
                 used_titles.add(agent_sheet_title)
                 agent_sheet = workbook.create_sheet(agent_sheet_title)
+                # The Agency/Agent split columns show how one PO's
+                # commission divides between the agency and the agent -
+                # that only makes sense on the combined agency-group
+                # sheet above, where both shares are visible side by
+                # side. An individual agent's own sheet never gets the
+                # split table, regardless of whether their agency uses
+                # agency_agent_split - confirmed with the business: only
+                # the agency-level view computes the split, the agent
+                # view just shows what's owed to them.
                 is_split_agent = any(row["commission_split_type"] == "agency_agent_split" for row in agent_rows)
+                if is_split_agent:
+                    # "What's owed to them" means just the agent's own
+                    # cut (full_payment_agent_amount etc.), not the
+                    # agency+agent combined total the group sheet above
+                    # shows - shallow copies, so this never mutates the
+                    # same row dicts the group sheet already rendered
+                    # from.
+                    display_rows = [
+                        {
+                            **row,
+                            "full_payment_commission": row["full_payment_agent_amount"],
+                            "installment_1_commission": row["installment_1_agent_amount"],
+                            "installment_6_commission": row["installment_6_agent_amount"],
+                        }
+                        for row in agent_rows
+                    ]
+                else:
+                    display_rows = agent_rows
                 agent_next_row = _write_table(
-                    agent_sheet, agent_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date),
-                    run_date=run_date, split_group_name=group_name if is_split_agent else None,
+                    agent_sheet, display_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date),
+                    run_date=run_date, split_group_name=None,
                 )
                 _write_summary_table(
                     agent_sheet, _load_summary_rows(conn, agency_group=group_name, agent_name=agent_name),
                     start_row=agent_next_row, current_run_id=commission_run_id,
                 )
-                _autosize_columns(agent_sheet, split_column_count if is_split_agent else column_count)
+                _autosize_columns(agent_sheet, column_count)
 
     workbook.save(output_path)
     return output_path
