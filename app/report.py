@@ -528,17 +528,23 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
 
     entries.sort(key=lambda e: e[0])
 
-    running_total = 0.0
+    # "Running Total" is a misnomer inherited verbatim from the real
+    # file's own column header - confirmed against the real file, it is
+    # NOT a cumulative sum across rows, just each cycle's own
+    # Full+First+Second total. The true across-every-cycle cumulative
+    # figure only ever appears once, on the separate "Total Sum of
+    # Commission Payout" line below the table (see _write_summary_table)
+    # - conflating the two here previously made every row past the
+    # first show a progressively larger, wrong figure.
     summary_rows = []
     for sort_date, run_id, full, first_half, second_half, remarks in entries:
-        running_total += full + first_half + second_half
         summary_rows.append({
             "run_id": run_id,
             "date_record": f"As at {_format_short_date(sort_date)}",
             "full_commission": full,
             "first_half_commission": first_half,
             "second_half_commission": second_half,
-            "running_total": running_total,
+            "running_total": full + first_half + second_half,
             "remarks": remarks,
         })
     return summary_rows
@@ -911,7 +917,11 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id):
         row_num += 1
 
     if summary_rows:
-        final_running_total = summary_rows[-1]["running_total"]
+        # The grand total across every cycle ever recorded - unlike
+        # each row's own "running_total" above, this one genuinely is
+        # cumulative, so it's summed fresh here rather than read off
+        # the last row.
+        final_running_total = sum(row["running_total"] for row in summary_rows)
         latest_date_label = summary_rows[-1]["date_record"].replace("As at ", "")
         label_cell = sheet.cell(row=row_num, column=1, value=f"Total Sum of Commission Payout as at {latest_date_label}")
         label_cell.font = _HEADER_FONT

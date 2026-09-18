@@ -154,7 +154,10 @@ def test_a_payment_after_the_historical_cutoff_is_still_detected_fresh(tmp_path)
     summary = _load_summary_rows(conn)
     conn.close()
     assert len(summary) == 2
-    assert summary[-1]["running_total"] == 3000.0  # 1500 historical + 1500 new
+    # "running_total" is each row's own total, not cumulative across
+    # rows (that's the separate grand total line - see _write_summary_table).
+    assert summary[-1]["running_total"] == 1500.0  # just this new row's own total
+    assert sum(row["running_total"] for row in summary) == 3000.0  # 1500 historical + 1500 new
 
 
 def test_bad_net_price_at_onboarding_does_not_permanently_lose_the_commission(tmp_path):

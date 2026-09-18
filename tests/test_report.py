@@ -968,8 +968,11 @@ def test_report_total_matches_sum_of_commission_columns(tmp_path):
 def test_summary_table_accumulates_across_multiple_runs(tmp_path):
     """
     The Date Record summary table reflects every run ever processed,
-    not just the current one, with a correctly accumulating running
-    total.
+    not just the current one. "Running Total" is each row's own total,
+    matching the real file's own convention exactly (confirmed against
+    the real file - it is NOT a cumulative sum across rows, despite the
+    name) - the true across-every-cycle grand total only appears once,
+    on the separate "Total Sum of Commission Payout" line.
     """
     db_path = _db_path(tmp_path)
 
@@ -1011,11 +1014,11 @@ def test_summary_table_accumulates_across_multiple_runs(tmp_path):
     summary_rows = [r for r in all_values if isinstance(r[0], str) and r[0].startswith("As at")]
 
     assert len(summary_rows) == 2
-    assert summary_rows[0][4] == 1500.0   # running total after run 1
-    assert summary_rows[1][4] == 4500.0   # running total after run 2 (1500 + 3000)
+    assert summary_rows[0][4] == 1500.0   # run 1's own total
+    assert summary_rows[1][4] == 3000.0   # run 2's own total, NOT cumulative (1500 + 3000)
 
     grand_total_row = next(r for r in all_values if isinstance(r[0], str) and r[0].startswith("Total Sum of Commission Payout"))
-    assert grand_total_row[4] == 4500.0
+    assert grand_total_row[4] == 4500.0  # the grand total line IS the true cumulative sum
 
 
 def test_no_summary_row_is_highlighted_yellow(tmp_path):
