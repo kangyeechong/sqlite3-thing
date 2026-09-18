@@ -89,6 +89,57 @@ def build_master_report(path, rows, historical_summary_rows=None):
     workbook.save(path)
 
 
+AOR_HEADERS = [
+    "No", "Acknowledgment Receipt No", "OR Receipt", "Acknowledgment Receipt Date",
+    "Purchase Statement No", "Purchase Statement Date", "PO No", "Lot No",
+    "Customer ID", "Customer Name", "Payor Name", "Payment Mode",
+    "Instalment Plan Status", "Reference No", "Payment Received (RM)",
+    "Created By", "Date Created",
+]
+
+_AOR_ROW_DEFAULTS = {
+    "OR Receipt": None,
+    "Purchase Statement No": "INS-TEST-00001",
+    "Purchase Statement Date": None,
+    "Lot No": "L00-TEST-0000-00",
+    "Payor Name": "Test Payor",
+    "Payment Mode": "Cheque",
+    "Instalment Plan Status": None,
+    "Payment Received (RM)": 500,
+    "Created By": "test",
+    "Date Created": None,
+}
+
+
+def build_aor_report(path, rows):
+    """
+    rows: list of dicts, each keyed by an AOR_HEADERS column (only the
+    keys you care about - everything else gets a sensible default).
+    Each dict must at least include "No", "Acknowledgment Receipt No",
+    "PO No", "Acknowledgment Receipt Date", and "Reference No".
+
+    Shaped like the real AOR export: a title block, headers a few rows
+    down, data below - close enough to the real layout for
+    app.aor._is_aor_shaped/_read_aor_rows to read it the same way they
+    read a real file.
+    """
+    workbook = openpyxl.Workbook()
+    sheet = workbook.active
+    sheet.title = "fin_dmy_collect_report-TEST"
+
+    sheet.cell(row=5, column=1, value="List of Acknowledgment of Receipt Report")
+
+    for col, header in enumerate(AOR_HEADERS, start=1):
+        sheet.cell(row=22, column=col, value=header)
+
+    for i, row in enumerate(rows):
+        full_row = {**_AOR_ROW_DEFAULTS, **row}
+        for col, header in enumerate(AOR_HEADERS, start=1):
+            sheet.cell(row=23 + i, column=col, value=full_row.get(header))
+
+    workbook.save(path)
+
+
 def confirm_all_pending(db_path, commission_run_id):
     """
     Test convenience: confirms every pending event on a commission run,

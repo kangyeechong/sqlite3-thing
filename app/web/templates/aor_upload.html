@@ -1,0 +1,14 @@
+{% extends "base.html" %}
+{% block title %}Upload AOR Report{% endblock %}
+{% block content %}
+  <h1>Upload AOR (Acknowledgment of Receipt) Report</h1>
+  <p class="muted">Upload the Kenjin AOR export. Every receipt on it fills in whatever paid-date columns are still blank on the matching PO (never overwriting one that's already there) - anything that newly makes a commission due gets picked up the same as an ordinary Master report upload.</p>
+  <p class="muted">Looking to upload the Master report instead? <a href="{{ url_for('web.upload') }}">Upload Commission Base Report</a>.</p>
+  <form method="post" enctype="multipart/form-data">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>AOR Report (.xlsx)
+      <input type="file" name="report_file" accept=".xlsx" required>
+    </label>
+    <button class="button" type="submit">Process upload</button>
+  </form>
+{% endblock %}

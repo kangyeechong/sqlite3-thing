@@ -8,6 +8,7 @@ import contextlib
 import datetime
 import os
 
+from .aor import import_aor_report
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
 from .commission import confirm_commission_events, load_events_for_run, process_commission_run
@@ -51,6 +52,46 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
 
     with _connect(db_path) as conn:
         import_result = import_master_report(conn, file_path, imported_by_user=created_by_user)
+
+        run_id, raised_events = process_commission_run(
+            conn,
+            as_of=run_date,
+            run_date=run_date,
+            source_filename=os.path.basename(file_path),
+            created_by_user=created_by_user,
+        )
+
+        conn.commit()
+
+    return {
+        "import_result": import_result,
+        "commission_run_id": run_id,
+        "raised_events": raised_events,
+    }
+
+
+def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None):
+    """
+    Runs the AOR pipeline against one uploaded Acknowledgment of
+    Receipt export - the exact same two-step shape as process_upload
+    above, just fed by a different source file:
+      1. fill in whatever paid-date columns this export's receipts
+         confirm that aren't already on file (app.aor.import_aor_report)
+      2. run the SAME detection process_upload uses, so a newly-filled
+         paid-date is picked up exactly as if it had come from the
+         Master report itself - agency/agent splitting, the Date
+         Record summary, and the review-and-confirm workflow all keep
+         working unchanged, since none of them care where a paid-date
+         came from.
+    """
+    if run_date is None:
+        run_date = datetime.date.today()
+
+    if not os.path.exists(db_path):
+        init_db(db_path)
+
+    with _connect(db_path) as conn:
+        import_result = import_aor_report(conn, file_path, imported_by_user=created_by_user)
 
         run_id, raised_events = process_commission_run(
             conn,

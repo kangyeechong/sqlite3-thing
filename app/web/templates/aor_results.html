@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}AOR Upload Results{% endblock %}
+{% block content %}
+  <h1>Results</h1>
+  <p>{{ import_result.receipts_seen }} receipt{{ "" if import_result.receipts_seen == 1 else "s" }} read from the file
+     ({{ import_result.receipts_imported }} new, {{ import_result.paid_dates_written }} paid-date{{ "" if import_result.paid_dates_written == 1 else "s" }} filled in).</p>
+
+  <h2>Import review panel</h2>
+  {% if import_result.review_flags %}
+    <p class="muted">Nothing here is blocked automatically - these are worth a human glance before relying on the results below.</p>
+    <table>
+      <tr><th>Receipt No</th><th>PO No</th><th>Message</th></tr>
+      {% for flag in import_result.review_flags %}
+        <tr><td>{{ flag.acknowledgment_receipt_no }}</td><td>{{ flag.po_no }}</td><td>{{ flag.message }}</td></tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Nothing flagged.</p>
+  {% endif %}
+
+  <h2>Newly detected this run</h2>
+  {% if raised_events %}
+    <p class="muted">Nothing here is due yet - it needs your confirmation first, so it can be checked against Accounts before anything is sent out.</p>
+    <table>
+      <tr><th>PO No</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th></tr>
+      {% for event in raised_events %}
+        <tr>
+          <td>{{ event.po_no }}</td>
+          <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
+          <td>{{ event.trigger_date }}</td>
+          <td class="money">{{ "%.2f"|format(event.amount) }}</td>
+        </tr>
+      {% endfor %}
+    </table>
+    <p><a class="button" href="{{ url_for('web.review', run_id=commission_run_id) }}">Review &amp; confirm</a></p>
+  {% else %}
+    <p class="muted">Nothing newly due this cycle - every filled-in paid-date either has nothing new since the last upload, or isn't eligible yet. Looking for a report to download? See <a href="{{ url_for('web.reports') }}">Past Reports</a>.</p>
+  {% endif %}
+
+  <p><a href="{{ url_for('web.upload_aor') }}">Upload another AOR file</a></p>
+{% endblock %}

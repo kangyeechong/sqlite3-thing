@@ -15,7 +15,7 @@ import pytest
 from app.db.connection import get_connection
 from app.web import create_app
 from app.web.auth import hash_password, verify_password
-from tests.helpers import build_master_report
+from tests.helpers import build_aor_report, build_master_report
 
 
 def test_verify_password_with_no_stored_hash_returns_false_not_a_crash():
@@ -68,14 +68,18 @@ def _login(client, email="staff@xekl.com", password="correct-horse-battery"):
     )
 
 
-def _upload(client, file_path, filename="upload.xlsx"):
-    token = _csrf_token(client, "/upload")
+def _upload(client, file_path, filename="upload.xlsx", path="/upload"):
+    token = _csrf_token(client, path)
     with open(file_path, "rb") as f:
         return client.post(
-            "/upload",
+            path,
             data={"report_file": (f, filename), "csrf_token": token},
             content_type="multipart/form-data",
         )
+
+
+def _upload_aor(client, file_path, filename="aor.xlsx"):
+    return _upload(client, file_path, filename=filename, path="/upload-aor")
 
 
 def _confirm_all_pending(client, run_id):
@@ -350,3 +354,75 @@ def test_downloading_a_nonexistent_run_id_returns_404(client):
 
 def test_upload_size_is_bounded(app):
     assert app.config["MAX_CONTENT_LENGTH"] == 20 * 1024 * 1024
+
+
+def test_aor_upload_page_requires_login(client):
+    response = client.get("/upload-aor")
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_aor_upload_without_choosing_a_file_shows_a_clear_message(client):
+    _login(client)
+    token = _csrf_token(client, "/upload-aor")
+    response = client.post(
+        "/upload-aor", data={"csrf_token": token}, content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert b"Choose an AOR" in response.data
+
+
+def test_aor_full_flow_fills_paid_date_and_reaches_review(client, tmp_path):
+    """
+    End-to-end through the actual HTTP layer: upload a Master report
+    with a PO that has no First Instalment Paid Date yet, then upload
+    an AOR export with a matching installment-1 receipt for it - the
+    results page should show it newly detected, with a review link,
+    exactly like an ordinary Master report upload would.
+    """
+    _login(client)
+
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 70001, "Customer ID": "CUSTWEBAOR1", "Customer Name": "Web AOR Customer 1",
+        "Niche/Tablet Price (RM)": 10000,  # 7.5% = 750.00
+        "Agency Code": "AC001",
+    }])
+    _upload(client, xlsx_master)
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-WEB-0001",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 70001, "Customer ID": "CUSTWEBAOR1", "Customer Name": "Web AOR Customer 1",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    response = _upload_aor(client, xlsx_aor)
+
+    assert response.status_code == 200
+    assert b"1 paid-date" in response.data
+    assert b"750.00" in response.data
+    assert b"Review &amp; confirm" in response.data
+
+    match = re.search(rb"/review/(\d+)", response.data)
+    assert match is not None
+    run_id = int(match.group(1))
+    confirm_response = _confirm_all_pending(client, run_id)
+    assert b"Confirmed 1 commission" in confirm_response.data
+
+
+def test_aor_upload_with_nothing_new_points_to_past_reports(client, tmp_path):
+    _login(client)
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-WEB-0002",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 99999, "Customer ID": "CUSTWEBAOR2", "Customer Name": "Web AOR Customer 2",
+        "Reference No": "HLB 000000 STAMP DUTY",
+    }])
+    response = _upload_aor(client, xlsx_aor)
+
+    assert response.status_code == 200
+    assert b"Nothing newly due this cycle" in response.data
+    assert b"Past Reports" in response.data

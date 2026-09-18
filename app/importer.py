@@ -2,9 +2,10 @@
 Reads a Kenjin "Commission Base Report" (Master report) Excel file and
 loads it into the ledger database.
 
-This is the only input Phase 1 accepts - see docs/data_model.md section
-1 for why the separate AOR (Acknowledgment of Receipt) file is
-deliberately not parsed here.
+The separate AOR (Acknowledgment of Receipt) export is a different
+file with its own import path - see app/aor.py - not handled here;
+this module actively rejects one if it's uploaded through this path by
+mistake (see _AOR_SIGNATURE_HEADER below).
 """
 
 import datetime

@@ -101,6 +101,16 @@ _NEW_TABLE_MIGRATIONS = [
             applied_at TEXT NOT NULL
         )
     """),
+    ("aor_receipts", """
+        CREATE TABLE aor_receipts (
+            id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+            acknowledgment_receipt_no  TEXT NOT NULL UNIQUE,
+            po_no                      INTEGER,
+            imported_at                TEXT NOT NULL,
+            imported_by_user           TEXT,
+            source_filename            TEXT
+        )
+    """),
 ]
 
 

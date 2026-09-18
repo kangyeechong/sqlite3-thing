@@ -190,6 +190,23 @@ CREATE TABLE IF NOT EXISTS historical_summary_rows (
     source_filename         TEXT
 );
 
+-- One row per AOR (Acknowledgment of Receipt) receipt ever imported -
+-- see app/aor.py. acknowledgment_receipt_no is UNIQUE so re-uploading
+-- an AOR export that overlaps a previous one (the real exports
+-- routinely do - see app/aor.py's module docstring) never re-applies
+-- the same receipt twice; the first import of a given receipt wins.
+-- po_no is nullable: a receipt whose PO doesn't exist in the ledger
+-- yet is still recorded as seen (so it's never silently reprocessed
+-- once the PO does show up) but has nothing to attach a paid-date to.
+CREATE TABLE IF NOT EXISTS aor_receipts (
+    id                         INTEGER PRIMARY KEY AUTOINCREMENT,
+    acknowledgment_receipt_no  TEXT NOT NULL UNIQUE,
+    po_no                      INTEGER,
+    imported_at                TEXT NOT NULL,
+    imported_by_user           TEXT,
+    source_filename            TEXT
+);
+
 -- Marks which multi-statement migrations (see app/db/connection.py)
 -- have fully completed, including any one-time data backfill - not
 -- just which columns/tables exist. A column can exist the instant its

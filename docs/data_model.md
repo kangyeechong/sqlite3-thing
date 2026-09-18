@@ -17,17 +17,23 @@ this is the checkpoint before writing a single line of application code.
 
 ## 1. Input scope
 
-**Decision:** Phase 1 imports only the Kenjin **Master report** (one
-Excel file per upload). The AOR file's `Reference No` column is too
-inconsistent to parse automatically (~15% of rows are ambiguous —
-`BALANCE PAYMENT`, `PARTIAL PAYMENT`, `STAMP DUTY`, `DEPOSIT`, etc. don't
-map cleanly to "installment 1" or "installment 6"). Staff keep doing that
-cross-check by hand, the same way they do today, and fill in the Master
-report's paid-date columns. The tool picks up from there.
+**Updated:** Phase 1 originally imported only the Kenjin **Master
+report**. The AOR (Acknowledgment of Receipt) export's `Reference No`
+column looked too inconsistent to parse automatically at first glance,
+but going through it row by row against a real sample with the
+business resolved it into a confirmed, deterministic rule set - see
+app/aor.py's module docstring for the exact rules. AOR is now a second,
+separate import path (its own upload page) that fills in whichever of
+a contract's paid-date columns are still blank; the Master report
+upload is unchanged and still the only way a PO's core sale data (and,
+if Accounts has already hand-typed a paid-date in themselves, that
+date) gets into the ledger in the first place.
 
-This means the entire system's picture of the world is: **"what does the
-paid-date columns of the latest Master report say."** Nothing is inferred
-from raw transaction text.
+Anything in the AOR export that doesn't match the confirmed rules gets
+flagged for a human to look at rather than guessed at - the ~15%
+"ambiguous" figure below was before those rules were pinned down;
+verified against a real export, only 2 of 93 real receipts (a typo,
+"PATRIAL PAYMENT") land there now.
 
 ---
 
@@ -418,7 +424,6 @@ usable day to day:
   needs confirming with the business before this can be built at all,
   not just before it's prioritized.
 - KPI bonus, agency development fund, agent incentive.
-- Auto-importing/parsing the AOR file.
 - Reversible name encryption (mentioned as a feature suggestion in the
   doc) — real names are stored as-is in the database; anonymization was
   only needed for getting sample data into this conversation safely.

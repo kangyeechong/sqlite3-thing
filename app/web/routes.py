@@ -20,7 +20,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from ..db.connection import get_connection
-from ..pipeline import confirm_events, list_confirmed_runs, load_review, process_upload
+from ..pipeline import confirm_events, list_confirmed_runs, load_review, process_aor_upload, process_upload
 from ..report import TRIGGER_LABELS, generate_commission_run_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
 from .csrf import validate_csrf_token
@@ -126,6 +126,48 @@ def upload():
 
     return render_template(
         "results.html",
+        import_result=result["import_result"],
+        raised_events=result["raised_events"],
+        commission_run_id=result["commission_run_id"],
+        trigger_labels=TRIGGER_LABELS,
+    )
+
+
+@bp.route("/upload-aor", methods=["GET", "POST"])
+@login_required
+def upload_aor():
+    if request.method == "GET":
+        return render_template("aor_upload.html")
+
+    validate_csrf_token(request.form.get("csrf_token"))
+
+    uploaded_file = request.files.get("report_file")
+    if uploaded_file is None or uploaded_file.filename == "":
+        flash("Choose an AOR (Acknowledgment of Receipt) file first.")
+        return render_template("aor_upload.html"), 400
+
+    safe_name = secure_filename(uploaded_file.filename) or "upload.xlsx"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        saved_path = os.path.join(tmp_dir, safe_name)
+        uploaded_file.save(saved_path)
+
+        try:
+            result = process_aor_upload(
+                current_app.config["DB_PATH"],
+                saved_path,
+                run_date=datetime.date.today(),
+                created_by_user=session["user_email"],
+            )
+        except Exception as exc:
+            # Same broad-on-purpose reasoning as upload() above - this
+            # is the boundary where an unpredictable, user-supplied
+            # file gets parsed.
+            flash(f"Couldn't process this file: {exc}")
+            return render_template("aor_upload.html"), 400
+
+    return render_template(
+        "aor_results.html",
         import_result=result["import_result"],
         raised_events=result["raised_events"],
         commission_run_id=result["commission_run_id"],
