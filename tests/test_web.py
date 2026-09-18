@@ -426,3 +426,45 @@ def test_aor_upload_with_nothing_new_points_to_past_reports(client, tmp_path):
     assert response.status_code == 200
     assert b"Nothing newly due this cycle" in response.data
     assert b"Past Reports" in response.data
+
+
+def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
+    _login(client)
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-WEB-0003",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 99998, "Customer ID": "CUSTWEBAOR3", "Customer Name": "Web AOR Customer 3",
+        "Reference No": "HLB 000000 STAMP DUTY",
+    }])
+    response = _upload_aor(client, xlsx_aor)
+    assert response.status_code == 200
+
+    match = re.search(rb"/download-aor-annotated/(\d+)", response.data)
+    assert match is not None, "Results page should link to the annotated download"
+    run_id = int(match.group(1))
+
+    download_response = client.get(f"/download-aor-annotated/{run_id}")
+    assert download_response.status_code == 200
+    assert download_response.headers["Content-Type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
+
+    workbook = openpyxl.load_workbook(io.BytesIO(download_response.data))
+    sheet = workbook.active
+    # A stamp duty row isn't a full-payment or installment 1/6 receipt -
+    # it gets read back correctly but stays uncolored.
+    assert sheet.cell(row=23, column=1).value == 1
+
+
+def test_download_aor_annotated_requires_login(client):
+    response = client.get("/download-aor-annotated/1")
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_download_aor_annotated_404s_for_an_unknown_run(client):
+    _login(client)
+    response = client.get("/download-aor-annotated/999999")
+    assert response.status_code == 404

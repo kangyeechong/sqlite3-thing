@@ -40,8 +40,18 @@ import re
 from dataclasses import dataclass, field
 
 import openpyxl
+from openpyxl.styles import PatternFill
 
 from .importer import _is_positive_whole_number, _to_iso_date
+
+# Matches the same green already used elsewhere in this app for "fully
+# paid off" (see app/report.py's _GREEN_FILL) - confirmed against a
+# real annotated AOR sample, the business's own green highlight (theme
+# accent6, tint 0.8) resolves to a very close shade (~DCEDD5) to this
+# one, so this keeps one consistent "paid off" color across the whole
+# tool rather than introducing a second, slightly different green.
+_GREEN_FILL = PatternFill(start_color="C6DEB5", end_color="C6DEB5", fill_type="solid")
+_YELLOW_FILL = PatternFill(start_color="FFFF00", end_color="FFFF00", fill_type="solid")
 
 _AOR_REQUIRED_HEADERS = (
     "No", "Acknowledgment Receipt No", "PO No", "Reference No", "Acknowledgment Receipt Date",
@@ -143,7 +153,10 @@ def _classify_reference(reference_text):
 
     if "FULL PAYMENT" in upper or "BALANCE PAYMENT" in upper:
         return ("full_payment", None)
-    if "STAMP DUTY" in upper or "DEPOSIT" in upper or "PARTIAL PAYMENT" in upper:
+    # "PATRIAL PAYMENT" is a real, recurring typo in the actual export
+    # (confirmed against a real sample) - same meaning as "PARTIAL
+    # PAYMENT", not a different, unrecognized case.
+    if "STAMP DUTY" in upper or "DEPOSIT" in upper or "PARTIAL PAYMENT" in upper or "PATRIAL PAYMENT" in upper:
         return ("skip", None)
     return ("unrecognized", None)
 
@@ -280,3 +293,69 @@ def import_aor_report(conn, file_path, imported_by_user=None):
         result.paid_dates_written += 1
 
     return result
+
+
+def annotate_aor_file(file_path, output):
+    """
+    Writes a colored copy of the AOR export to `output` (a path or a
+    file-like object) - replicating exactly what a staff member
+    currently does by hand while going through this file: green for
+    every receipt belonging to a PO that reached full payment in this
+    file (the whole group leading up to it, not just the completing
+    row - a "PARTIAL"/"PATRIAL PAYMENT" followed by a "BALANCE PAYMENT"
+    for the same PO is one completed sale, and both rows get colored),
+    yellow for a receipt whose own (INST X/Y) tag is installment 1 or
+    6 specifically. Confirmed against a real annotated sample - these
+    are the exact colors and grouping the business already uses.
+
+    Purely a read-and-recolor of the uploaded file itself - no ledger
+    lookups, no side effects, and independent of import_aor_report
+    (this only reflects what's IN the file, not what got applied to
+    the database, so it's safe to generate even for receipts already
+    seen on an earlier upload).
+    """
+    workbook = openpyxl.load_workbook(file_path, data_only=True)
+    aor_sheets = [sheet for sheet in workbook.worksheets if _is_aor_shaped(sheet)]
+
+    # First pass: which POs have a full-payment completion anywhere in
+    # this file, so every receipt row for that PO (not just the
+    # completing one) gets colored green.
+    full_payment_pos = set()
+    for sheet in aor_sheets:
+        for raw_row in _read_aor_rows(sheet):
+            po_no = raw_row.get("PO No")
+            if not _is_positive_whole_number(po_no):
+                continue
+            kind, _ = _classify_reference(raw_row.get("Reference No"))
+            if kind == "full_payment":
+                full_payment_pos.add(int(po_no))
+
+    # Second pass: color every data row.
+    for sheet in aor_sheets:
+        header_row_num = _find_header_row(sheet)
+        if header_row_num is None:
+            continue
+        headers = [cell.value for cell in sheet[header_row_num]]
+        po_col = headers.index("PO No") + 1
+        ref_col = headers.index("Reference No") + 1
+        no_col = headers.index("No") + 1
+        row_num = header_row_num + 1
+        while True:
+            row_no = sheet.cell(row=row_num, column=no_col).value
+            if not _is_positive_whole_number(row_no):
+                break
+            po_no = sheet.cell(row=row_num, column=po_col).value
+            reference = sheet.cell(row=row_num, column=ref_col).value
+            kind, numbers = _classify_reference(reference)
+            targets = _targets_for_classification(kind, numbers)
+            fill = None
+            if "installment_1" in targets or "installment_6" in targets:
+                fill = _YELLOW_FILL
+            elif _is_positive_whole_number(po_no) and int(po_no) in full_payment_pos:
+                fill = _GREEN_FILL
+            if fill is not None:
+                for col in range(1, len(headers) + 1):
+                    sheet.cell(row=row_num, column=col).fill = fill
+            row_num += 1
+
+    workbook.save(output)

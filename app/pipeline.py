@@ -101,12 +101,32 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None):
             created_by_user=created_by_user,
         )
 
+        # Kept so the "download annotated copy" route can regenerate
+        # the colored version fresh from the original upload at any
+        # later time (see app/aor.py's annotate_aor_file) - not the
+        # annotated bytes themselves, since those are cheap to
+        # regenerate and this way a future change to the coloring
+        # rules applies retroactively to every past upload's download
+        # too. Keyed by its own id rather than run_id, since run_id is
+        # None whenever nothing was newly detected this upload (see
+        # process_commission_run) but the file is always worth
+        # annotating regardless.
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        upload_cursor = conn.execute(
+            "INSERT INTO aor_uploads (commission_run_id, filename, file_bytes, uploaded_at) "
+            "VALUES (?, ?, ?, ?)",
+            (run_id, os.path.basename(file_path), file_bytes, datetime.datetime.now().isoformat()),
+        )
+        aor_upload_id = upload_cursor.lastrowid
+
         conn.commit()
 
     return {
         "import_result": import_result,
         "commission_run_id": run_id,
         "raised_events": raised_events,
+        "aor_upload_id": aor_upload_id,
     }
 
 

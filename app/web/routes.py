@@ -19,6 +19,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+from ..aor import annotate_aor_file
 from ..db.connection import get_connection
 from ..pipeline import confirm_events, list_confirmed_runs, load_review, process_aor_upload, process_upload
 from ..report import TRIGGER_LABELS, generate_commission_run_report
@@ -171,7 +172,52 @@ def upload_aor():
         import_result=result["import_result"],
         raised_events=result["raised_events"],
         commission_run_id=result["commission_run_id"],
+        aor_upload_id=result["aor_upload_id"],
         trigger_labels=TRIGGER_LABELS,
+    )
+
+
+@bp.route("/download-aor-annotated/<int:upload_id>")
+@login_required
+def download_aor_annotated(upload_id):
+    """
+    Regenerates and serves the colored copy of the AOR file uploaded
+    for this run (see app/aor.py's annotate_aor_file) - the same
+    green/yellow highlighting a staff member currently applies by hand
+    while filtering this file. Built fresh from the originally
+    uploaded bytes on every request, same "generate on demand" shape
+    as /download/<run_id> above, rather than caching the colored
+    output. Keyed by the AOR upload itself (app.pipeline's
+    aor_upload_id), not the commission run - an upload that raised
+    nothing newly due still has no commission_runs row at all, but its
+    file is always worth annotating and downloading.
+    """
+    conn = get_connection(current_app.config["DB_PATH"])
+    try:
+        upload_row = conn.execute(
+            "SELECT filename, file_bytes FROM aor_uploads WHERE id = ?", (upload_id,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if upload_row is None:
+        abort(404, description=f"No AOR upload with id {upload_id}.")
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        safe_name = secure_filename(upload_row["filename"]) or "aor.xlsx"
+        saved_path = os.path.join(tmp_dir, safe_name)
+        with open(saved_path, "wb") as f:
+            f.write(upload_row["file_bytes"])
+
+        buffer = io.BytesIO()
+        annotate_aor_file(saved_path, buffer)
+
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"aor_annotated_{upload_id}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 
 

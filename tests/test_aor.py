@@ -12,10 +12,12 @@ import datetime
 
 import pytest
 
-from app.aor import _classify_reference
+import openpyxl
+
+from app.aor import _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file
 from app.db.connection import get_connection
 from app.pipeline import process_aor_upload, process_upload
-from tests.helpers import build_aor_report, build_master_report, confirm_all_pending
+from tests.helpers import AOR_HEADERS, build_aor_report, build_master_report, confirm_all_pending
 
 
 def _db_path(tmp_path):
@@ -39,8 +41,11 @@ def _db_path(tmp_path):
     ("HLB 712873 STAMP DUTY", ("skip", None)),
     ("G M4176 DEPOSIT", ("skip", None)),
     ("G V9095 PARTIAL PAYMENT", ("skip", None)),
+    # "PATRIAL PAYMENT" is a real, recurring typo in the actual export -
+    # same meaning as "PARTIAL PAYMENT", not a different, unrecognized case.
+    ("C M6243 PATRIAL PAYMENT", ("skip", None)),
     # Doesn't match anything known.
-    ("C M6243 PATRIAL PAYMENT", ("unrecognized", None)),
+    ("C M6243 MYSTERY PAYMENT", ("unrecognized", None)),
     (None, ("unrecognized", None)),
     ("", ("unrecognized", None)),
 ])
@@ -222,7 +227,7 @@ def test_unrecognized_reference_is_flagged_not_silently_applied(tmp_path):
         "No": 1, "Acknowledgment Receipt No": "RC-TEST-0005",
         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
         "PO No": 80005, "Customer ID": "CUSTA5", "Customer Name": "Customer A5",
-        "Reference No": "C M6243 PATRIAL PAYMENT",  # real typo from the real file
+        "Reference No": "C M6243 MYSTERY PAYMENT",  # doesn't match any known pattern
     }])
     result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
 
@@ -325,7 +330,6 @@ def test_full_pipeline_aor_paid_date_flows_through_to_confirmed_report(tmp_path)
     report_path = tmp_path / "report.xlsx"
     generate_report(db_path, run_id, str(report_path))
 
-    import openpyxl
     workbook = openpyxl.load_workbook(report_path)
     assert "AW Consultancy" in workbook.sheetnames
     sheet = workbook["AW Consultancy"]
@@ -334,3 +338,98 @@ def test_full_pipeline_aor_paid_date_flows_through_to_confirmed_report(tmp_path)
     values = [c.value for row in sheet.iter_rows() for c in row]
     assert 700.0 in values
     assert 800.0 in values
+
+
+# --- annotate_aor_file: the downloadable annotated copy -----------------
+
+def _fill_of(sheet, row_no, header):
+    col = AOR_HEADERS.index(header) + 1
+    return sheet.cell(row=22 + row_no, column=col).fill  # header row 22, data starts row 23 -> row_no 1 is row 23
+
+
+def test_annotate_aor_file_colors_a_full_payment_group_green(tmp_path):
+    """
+    The exact real-file scenario the business described: a PARTIAL (or
+    the real "PATRIAL" typo) payment followed by a BALANCE PAYMENT for
+    the same PO is one completed sale - both rows get colored green,
+    not just the completing row.
+    """
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-A-0091", "PO No": 90001,
+            "Customer ID": "CUSTB1", "Customer Name": "Customer B1",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 7),
+            "Reference No": "C M6243 PATRIAL PAYMENT",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-A-0092", "PO No": 90001,
+            "Customer ID": "CUSTB1", "Customer Name": "Customer B1",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 8),
+            "Reference No": "C V5135 BALANCE PAYMENT",
+        },
+    ])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path))
+
+    workbook = openpyxl.load_workbook(output_path)
+    sheet = workbook.active
+    assert _fill_of(sheet, 1, "Reference No").fgColor.rgb == _GREEN_FILL.fgColor.rgb
+    assert _fill_of(sheet, 2, "Reference No").fgColor.rgb == _GREEN_FILL.fgColor.rgb
+
+
+def test_annotate_aor_file_colors_installment_1_and_6_yellow(tmp_path):
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-B-0001", "PO No": 90002,
+            "Customer ID": "CUSTB2", "Customer Name": "Customer B2",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 7),
+            "Reference No": "TRF 07/08/2026 (INST 01/24)",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-B-0002", "PO No": 90003,
+            "Customer ID": "CUSTB3", "Customer Name": "Customer B3",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 8),
+            "Reference No": "TRF 08/08/2026 (INST 06/24)",
+        },
+    ])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path))
+
+    workbook = openpyxl.load_workbook(output_path)
+    sheet = workbook.active
+    assert _fill_of(sheet, 1, "Reference No").fgColor.rgb == _YELLOW_FILL.fgColor.rgb
+    assert _fill_of(sheet, 2, "Reference No").fgColor.rgb == _YELLOW_FILL.fgColor.rgb
+
+
+def test_annotate_aor_file_leaves_non_matching_rows_uncolored(tmp_path):
+    """A plain DEPOSIT that never leads to a full payment in this file,
+    and an installment number that isn't 1 or 6, are real recognized
+    rows - but neither is what a staff member filters for, so neither
+    gets highlighted."""
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-C-0001", "PO No": 90004,
+            "Customer ID": "CUSTB4", "Customer Name": "Customer B4",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 7),
+            "Reference No": "G M4176 DEPOSIT",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-C-0002", "PO No": 90005,
+            "Customer ID": "CUSTB5", "Customer Name": "Customer B5",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 8),
+            "Reference No": "JPAY D84E4S9N (INST 15/24)",
+        },
+    ])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path))
+
+    workbook = openpyxl.load_workbook(output_path)
+    sheet = workbook.active
+    assert _fill_of(sheet, 1, "Reference No").fill_type is None
+    assert _fill_of(sheet, 2, "Reference No").fill_type is None

@@ -111,6 +111,15 @@ _NEW_TABLE_MIGRATIONS = [
             source_filename            TEXT
         )
     """),
+    ("aor_uploads", """
+        CREATE TABLE aor_uploads (
+            id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+            commission_run_id  INTEGER REFERENCES commission_runs(id),
+            filename           TEXT NOT NULL,
+            file_bytes         BLOB NOT NULL,
+            uploaded_at        TEXT NOT NULL
+        )
+    """),
 ]
 
 
