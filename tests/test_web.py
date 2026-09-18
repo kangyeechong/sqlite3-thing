@@ -452,10 +452,13 @@ def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     )
 
     workbook = openpyxl.load_workbook(io.BytesIO(download_response.data))
-    sheet = workbook.active
-    # A stamp duty row isn't a full-payment or installment 1/6 receipt -
-    # it gets read back correctly but stays uncolored.
-    assert sheet.cell(row=23, column=1).value == 1
+    # The original sheet comes through untouched...
+    original_sheet = workbook.worksheets[0]
+    assert original_sheet.cell(row=23, column=1).value == 1
+    # ...and a stamp duty row isn't a full-payment or installment 1/6
+    # receipt, so the new "Filtered" sheet has no data rows for it.
+    filtered_sheet = workbook["Filtered"]
+    assert filtered_sheet.cell(row=2, column=1).value is None
 
 
 def test_download_aor_annotated_requires_login(client):

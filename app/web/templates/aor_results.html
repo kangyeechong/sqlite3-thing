@@ -6,7 +6,7 @@
      ({{ import_result.receipts_imported }} new, {{ import_result.paid_dates_written }} paid-date{{ "" if import_result.paid_dates_written == 1 else "s" }} filled in).</p>
 
   <p><a class="button" href="{{ url_for('web.download_aor_annotated', upload_id=aor_upload_id) }}">Download annotated copy</a>
-     <span class="muted">&mdash; the same file, with the rows that mattered highlighted (green for a completed full payment, yellow for a 1st/6th installment), the way this gets marked up by hand today.</span></p>
+     <span class="muted">&mdash; your uploaded file, unchanged, plus one more sheet ("Filtered") with just the rows that mattered pulled out and highlighted (green for a completed full payment, yellow for a 1st/6th installment) &mdash; the same way this gets marked up by hand today.</span></p>
 
   <h2>Import review panel</h2>
   {% if import_result.review_flags %}

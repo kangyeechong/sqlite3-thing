@@ -297,29 +297,37 @@ def import_aor_report(conn, file_path, imported_by_user=None):
 
 def annotate_aor_file(file_path, output):
     """
-    Writes a colored copy of the AOR export to `output` (a path or a
-    file-like object) - replicating exactly what a staff member
-    currently does by hand while going through this file: green for
-    every receipt belonging to a PO that reached full payment in this
-    file (the whole group leading up to it, not just the completing
-    row - a "PARTIAL"/"PATRIAL PAYMENT" followed by a "BALANCE PAYMENT"
-    for the same PO is one completed sale, and both rows get colored),
-    yellow for a receipt whose own (INST X/Y) tag is installment 1 or
-    6 specifically. Confirmed against a real annotated sample - these
-    are the exact colors and grouping the business already uses.
+    Writes a copy of the AOR export to `output` (a path or a file-like
+    object) with every original sheet left exactly as uploaded, plus
+    one new sheet appended - "Filtered" - containing only the rows a
+    staff member currently pulls out by hand while going through this
+    file: every receipt belonging to a PO that reached full payment in
+    this file (the whole group leading up to it, not just the
+    completing row - a "PARTIAL"/"PATRIAL PAYMENT" followed by a
+    "BALANCE PAYMENT" for the same PO is one completed sale, and both
+    rows are included), colored green, and every receipt whose own
+    (INST X/Y) tag is installment 1 or 6 specifically, colored yellow.
+    Confirmed against a real annotated sample - these are the exact
+    colors and grouping the business already uses.
 
-    Purely a read-and-recolor of the uploaded file itself - no ledger
-    lookups, no side effects, and independent of import_aor_report
-    (this only reflects what's IN the file, not what got applied to
-    the database, so it's safe to generate even for receipts already
-    seen on an earlier upload).
+    Reads the uploaded file twice on purpose: once with data_only=True
+    to classify rows and pull out values (the same read every other
+    function in this module uses), and once completely untouched to
+    build the output from - so a cell that happens to hold a formula
+    in the original file is never silently flattened to its cached
+    value just because this function also had to read it.
+
+    No ledger lookups, no side effects, and independent of
+    import_aor_report (this only reflects what's IN the file, not what
+    got applied to the database, so it's safe to generate even for
+    receipts already seen on an earlier upload).
     """
-    workbook = openpyxl.load_workbook(file_path, data_only=True)
-    aor_sheets = [sheet for sheet in workbook.worksheets if _is_aor_shaped(sheet)]
+    values_workbook = openpyxl.load_workbook(file_path, data_only=True)
+    aor_sheets = [sheet for sheet in values_workbook.worksheets if _is_aor_shaped(sheet)]
 
     # First pass: which POs have a full-payment completion anywhere in
     # this file, so every receipt row for that PO (not just the
-    # completing one) gets colored green.
+    # completing one) is pulled into the filtered sheet as green.
     full_payment_pos = set()
     for sheet in aor_sheets:
         for raw_row in _read_aor_rows(sheet):
@@ -330,23 +338,21 @@ def annotate_aor_file(file_path, output):
             if kind == "full_payment":
                 full_payment_pos.add(int(po_no))
 
-    # Second pass: color every data row.
+    # Second pass: pick out just the rows that matter, in the order
+    # they appear in the file - same spirit as a human scrolling
+    # through it top to bottom and filtering as they go.
+    headers = None
+    filtered_rows = []  # list of (row_values, fill)
     for sheet in aor_sheets:
         header_row_num = _find_header_row(sheet)
         if header_row_num is None:
             continue
-        headers = [cell.value for cell in sheet[header_row_num]]
-        po_col = headers.index("PO No") + 1
-        ref_col = headers.index("Reference No") + 1
-        no_col = headers.index("No") + 1
-        row_num = header_row_num + 1
-        while True:
-            row_no = sheet.cell(row=row_num, column=no_col).value
-            if not _is_positive_whole_number(row_no):
-                break
-            po_no = sheet.cell(row=row_num, column=po_col).value
-            reference = sheet.cell(row=row_num, column=ref_col).value
-            kind, numbers = _classify_reference(reference)
+        sheet_headers = [cell.value for cell in sheet[header_row_num]]
+        if headers is None:
+            headers = sheet_headers
+        for raw_row in _read_aor_rows(sheet):
+            po_no = raw_row.get("PO No")
+            kind, numbers = _classify_reference(raw_row.get("Reference No"))
             targets = _targets_for_classification(kind, numbers)
             fill = None
             if "installment_1" in targets or "installment_6" in targets:
@@ -354,8 +360,22 @@ def annotate_aor_file(file_path, output):
             elif _is_positive_whole_number(po_no) and int(po_no) in full_payment_pos:
                 fill = _GREEN_FILL
             if fill is not None:
-                for col in range(1, len(headers) + 1):
-                    sheet.cell(row=row_num, column=col).fill = fill
-            row_num += 1
+                filtered_rows.append(([raw_row.get(h) for h in sheet_headers], fill))
 
-    workbook.save(output)
+    output_workbook = openpyxl.load_workbook(file_path)  # untouched - this is what gets kept as-is
+    filtered_sheet_name = "Filtered"
+    suffix = 2
+    while filtered_sheet_name in output_workbook.sheetnames:
+        filtered_sheet_name = f"Filtered ({suffix})"
+        suffix += 1
+    filtered_sheet = output_workbook.create_sheet(filtered_sheet_name)
+
+    if headers is not None:
+        for col, header in enumerate(headers, start=1):
+            filtered_sheet.cell(row=1, column=col, value=header)
+        for row_offset, (values, fill) in enumerate(filtered_rows, start=2):
+            for col, value in enumerate(values, start=1):
+                cell = filtered_sheet.cell(row=row_offset, column=col, value=value)
+                cell.fill = fill
+
+    output_workbook.save(output)

@@ -341,18 +341,57 @@ def test_full_pipeline_aor_paid_date_flows_through_to_confirmed_report(tmp_path)
 
 
 # --- annotate_aor_file: the downloadable annotated copy -----------------
+#
+# The original sheet(s) must come through completely untouched - the
+# new "Filtered" sheet is the only place any coloring or row-picking
+# happens.
 
-def _fill_of(sheet, row_no, header):
-    col = AOR_HEADERS.index(header) + 1
-    return sheet.cell(row=22 + row_no, column=col).fill  # header row 22, data starts row 23 -> row_no 1 is row 23
+def _filtered_rows(workbook):
+    """Returns the "Filtered" sheet's data rows as (reference_no, fill)."""
+    sheet = workbook["Filtered"]
+    ref_col = AOR_HEADERS.index("Reference No") + 1
+    rows = []
+    for row_num in range(2, sheet.max_row + 1):
+        cell = sheet.cell(row=row_num, column=ref_col)
+        if cell.value is None:
+            continue
+        rows.append((cell.value, cell.fill))
+    return rows
+
+
+def test_annotate_aor_file_leaves_the_original_sheet_untouched(tmp_path):
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-Z-0001", "PO No": 90000,
+        "Customer ID": "CUSTB0", "Customer Name": "Customer B0",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 7),
+        "Reference No": "TRF 07/08/2026 (INST 01/24)",
+    }])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path))
+
+    original = openpyxl.load_workbook(xlsx_aor)
+    result = openpyxl.load_workbook(output_path)
+
+    assert result.sheetnames[0] == original.sheetnames[0]
+    original_sheet = original[original.sheetnames[0]]
+    result_sheet = result[original.sheetnames[0]]
+    ref_col = AOR_HEADERS.index("Reference No") + 1
+    # The installment-1 row would be yellow in the filtered sheet, but
+    # the original sheet's own cell must be left plain - unmodified.
+    assert result_sheet.cell(row=23, column=ref_col).fill.fill_type is None
+    assert result_sheet.cell(row=23, column=ref_col).value == original_sheet.cell(row=23, column=ref_col).value
+    assert "Filtered" in result.sheetnames
+    assert "Filtered" not in original.sheetnames
 
 
 def test_annotate_aor_file_colors_a_full_payment_group_green(tmp_path):
     """
     The exact real-file scenario the business described: a PARTIAL (or
     the real "PATRIAL" typo) payment followed by a BALANCE PAYMENT for
-    the same PO is one completed sale - both rows get colored green,
-    not just the completing row.
+    the same PO is one completed sale - both rows land in the filtered
+    sheet colored green, not just the completing row.
     """
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [
@@ -374,9 +413,10 @@ def test_annotate_aor_file_colors_a_full_payment_group_green(tmp_path):
     annotate_aor_file(str(xlsx_aor), str(output_path))
 
     workbook = openpyxl.load_workbook(output_path)
-    sheet = workbook.active
-    assert _fill_of(sheet, 1, "Reference No").fgColor.rgb == _GREEN_FILL.fgColor.rgb
-    assert _fill_of(sheet, 2, "Reference No").fgColor.rgb == _GREEN_FILL.fgColor.rgb
+    rows = _filtered_rows(workbook)
+    assert [r[0] for r in rows] == ["C M6243 PATRIAL PAYMENT", "C V5135 BALANCE PAYMENT"]
+    assert rows[0][1].fgColor.rgb == _GREEN_FILL.fgColor.rgb
+    assert rows[1][1].fgColor.rgb == _GREEN_FILL.fgColor.rgb
 
 
 def test_annotate_aor_file_colors_installment_1_and_6_yellow(tmp_path):
@@ -400,16 +440,17 @@ def test_annotate_aor_file_colors_installment_1_and_6_yellow(tmp_path):
     annotate_aor_file(str(xlsx_aor), str(output_path))
 
     workbook = openpyxl.load_workbook(output_path)
-    sheet = workbook.active
-    assert _fill_of(sheet, 1, "Reference No").fgColor.rgb == _YELLOW_FILL.fgColor.rgb
-    assert _fill_of(sheet, 2, "Reference No").fgColor.rgb == _YELLOW_FILL.fgColor.rgb
+    rows = _filtered_rows(workbook)
+    assert [r[0] for r in rows] == ["TRF 07/08/2026 (INST 01/24)", "TRF 08/08/2026 (INST 06/24)"]
+    assert rows[0][1].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
+    assert rows[1][1].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
 
 
-def test_annotate_aor_file_leaves_non_matching_rows_uncolored(tmp_path):
+def test_annotate_aor_file_excludes_non_matching_rows_from_the_filtered_sheet(tmp_path):
     """A plain DEPOSIT that never leads to a full payment in this file,
     and an installment number that isn't 1 or 6, are real recognized
     rows - but neither is what a staff member filters for, so neither
-    gets highlighted."""
+    shows up in the filtered sheet at all."""
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [
         {
@@ -430,6 +471,4 @@ def test_annotate_aor_file_leaves_non_matching_rows_uncolored(tmp_path):
     annotate_aor_file(str(xlsx_aor), str(output_path))
 
     workbook = openpyxl.load_workbook(output_path)
-    sheet = workbook.active
-    assert _fill_of(sheet, 1, "Reference No").fill_type is None
-    assert _fill_of(sheet, 2, "Reference No").fill_type is None
+    assert _filtered_rows(workbook) == []
