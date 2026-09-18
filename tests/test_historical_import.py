@@ -467,17 +467,19 @@ def test_a_stale_file_with_an_older_history_still_uses_the_latest_known_cutoff(t
     assert result2["commission_run_id"] is None
 
 
-def test_historical_rows_only_appear_on_the_unscoped_all_view(tmp_path):
-    """There's no per-agency breakdown of the sheet's own pre-existing
-    history to read - only the unscoped "All" summary includes it."""
+def test_unscoped_view_uses_the_real_historical_row_verbatim(tmp_path):
+    """The unscoped "All" summary shows the sheet's own pre-existing
+    history exactly as it was on file - not a recomputed figure."""
     cutoff = datetime.date(2026, 6, 5)
     settlement_date = cutoff - datetime.timedelta(days=6)
+    sale_date = settlement_date - datetime.timedelta(days=20)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(
         xlsx_path,
         [{
             "No": 1, "PO No": 90005, "Customer ID": "CUSTH5", "Customer Name": "Customer H5",
             "Niche/Tablet Price (RM)": 10000,
+            "PO Date": sale_date, "Signature Date": sale_date,
             "Full Settlement Paid Date": settlement_date,
             "Agency Code": "AC001",
         }],
@@ -491,6 +493,63 @@ def test_historical_rows_only_appear_on_the_unscoped_all_view(tmp_path):
     process_upload(db_path, str(xlsx_path), run_date=datetime.date.today())
 
     conn = get_connection(db_path)
-    assert len(_load_summary_rows(conn)) == 1  # unscoped: includes the historical row
-    assert len(_load_summary_rows(conn, agency_group="AC001")) == 0  # scoped: no historical data to show
+    summary = _load_summary_rows(conn)
     conn.close()
+    assert len(summary) == 1
+    assert summary[0]["full_commission"] == 1500.0
+
+
+def test_scoped_view_reconstructs_its_own_slice_of_the_history(tmp_path):
+    """
+    The real sheet only ever carries ONE company-wide total per "As at"
+    date, never a per-agency breakdown - so a scoped (agency/agent)
+    summary reconstructs its own slice instead of showing nothing (see
+    _reconstruct_scoped_historical_entries). Two agencies each
+    contribute part of the same historical total; each agency's own
+    summary must show only its own share, and the two shares must add
+    up to the same grand total the unscoped view shows.
+    """
+    cutoff = datetime.date(2026, 6, 5)
+    settlement_date = cutoff - datetime.timedelta(days=6)
+    sale_date = settlement_date - datetime.timedelta(days=20)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [
+            {
+                "No": 1, "PO No": 90040, "Customer ID": "CUSTSC1", "Customer Name": "Customer SC1",
+                "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
+                "PO Date": sale_date, "Signature Date": sale_date,
+                "Full Settlement Paid Date": settlement_date,
+                "Agency Code": "AC001",
+            },
+            {
+                "No": 2, "PO No": 90041, "Customer ID": "CUSTSC2", "Customer Name": "Customer SC2",
+                "Niche/Tablet Price (RM)": 8000,  # 15% = 1200.00
+                "PO Date": sale_date, "Signature Date": sale_date,
+                "Full Settlement Paid Date": settlement_date,
+                "Agency Code": "AC777",
+            },
+        ],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 2700.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date.today())
+
+    conn = get_connection(db_path)
+    ac001_summary = _load_summary_rows(conn, agency_group="AC001")
+    ac777_summary = _load_summary_rows(conn, agency_group="AC777")
+    all_summary = _load_summary_rows(conn)
+    conn.close()
+
+    assert len(ac001_summary) == 1
+    assert ac001_summary[0]["full_commission"] == 1500.0
+    assert len(ac777_summary) == 1
+    assert ac777_summary[0]["full_commission"] == 1200.0
+    # The two scoped slices add up to the same grand total as "All".
+    assert ac001_summary[0]["full_commission"] + ac777_summary[0]["full_commission"] == 2700.0
+    assert all_summary[0]["full_commission"] == 2700.0

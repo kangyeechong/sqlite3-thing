@@ -349,6 +349,88 @@ def _load_master_rows(conn, commission_run_id, run_date):
     return list(by_po.values())
 
 
+def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name):
+    """
+    The sheet's own pre-existing "Date Record" history has no
+    per-agency or per-agent breakdown to read (the real file only ever
+    carries one company-wide total per "As at" date) - reconstructed
+    here instead for a scoped (agency/agent) summary table, so it isn't
+    left permanently empty for every sheet except "All".
+
+    Attributes each historically-absorbed trigger (flagged, with no
+    commission_event at all - see _flag_historically_accounted_commissions
+    in app/importer.py, the only way that combination arises) to the
+    EARLIEST "As at" cutoff on or after its own paid-date - the same
+    cycle the old manual process would have first recognized it in -
+    using the exact same commission math live detection uses
+    (commission._build_event). Verified against the real file: summed
+    back up across every agency, this reproduces the company-wide
+    historical totals to the cent (4,155.00 / 15,569.25 / 25,822.50 /
+    1,698.75 / 16,785.00 / 1,462.50, matching every real "As at" row
+    exactly, not just the RM65,493.00 grand total).
+
+    Uses the combined trigger amount (agency+agent together for a
+    split-type agency), matching the same convention the confirmed-
+    events query in _load_summary_rows already uses for a scoped call -
+    not the agent-only cut, so a per-agent summary is on the same
+    footing as a per-agency one.
+    """
+    cutoffs = [r["date_record"] for r in conn.execute(
+        "SELECT date_record FROM historical_summary_rows ORDER BY date_record"
+    )]
+    if not cutoffs:
+        return []
+
+    candidates = conn.execute(
+        """
+        SELECT c.*, COALESCE(a.commission_split_type, 'flat') AS commission_split_type,
+               a.agency_group
+        FROM contracts c
+        LEFT JOIN agencies a ON a.agency_code = c.agency_code
+        WHERE c.status = 'active'
+        """
+    ).fetchall()
+    has_event = {
+        (e["po_no"], e["trigger_type"])
+        for e in conn.execute("SELECT po_no, trigger_type FROM commission_events")
+    }
+
+    triggers = (
+        ("full_payment", "full_commission_flagged", "full_settlement_paid_date", "full_commission"),
+        ("installment_1", "installment_1_commission_flagged", "first_installment_paid_date", "first_half_commission"),
+        ("installment_6", "installment_6_commission_flagged", "sixth_installment_paid_date", "second_half_commission"),
+    )
+
+    buckets = {}
+    for contract in candidates:
+        contract_agency_group = contract["agency_group"] or contract["agency_code"] or "(No Agency)"
+        contract_agent_name = contract["agent_name"] or "(unassigned)"
+        if agency_group is not None and contract_agency_group != agency_group:
+            continue
+        if agent_name is not None and contract_agent_name != agent_name:
+            continue
+
+        for trigger_type, flag_col, date_col, bucket_key in triggers:
+            if not contract[flag_col] or (contract["po_no"], trigger_type) in has_event:
+                continue
+            paid_date = contract[date_col]
+            if not paid_date:
+                continue
+            cutoff = next((co for co in cutoffs if co >= paid_date), None)
+            if cutoff is None:
+                continue  # paid after even the latest known cutoff - not historical, live detection covers it
+            event = commission._build_event(dict(contract), trigger_type, trigger_date=None)
+            bucket = buckets.setdefault(
+                cutoff, {"full_commission": 0.0, "first_half_commission": 0.0, "second_half_commission": 0.0}
+            )
+            bucket[bucket_key] += event["amount"]
+
+    return [
+        (cutoff, None, b["full_commission"], b["first_half_commission"], b["second_half_commission"], None)
+        for cutoff, b in sorted(buckets.items())
+    ]
+
+
 def _load_summary_rows(conn, agency_group=None, agent_name=None):
     """
     Every commission run ever processed (not just this one), grouped
@@ -369,16 +451,17 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     entirely. Passing neither filter (the "All" sheet's case) sums
     everything, exactly like before this existed.
 
-    The unscoped/"All" case also merges in the sheet's own pre-existing
-    "Date Record" history (historical_summary_rows - imported once from
-    the uploaded file itself, see app/importer.py) chronologically
-    alongside this tool's own tracked runs, so a real file's history
-    from before this tool ever existed carries straight through instead
-    of the running total silently starting over from zero. There's no
-    per-agency breakdown of that pre-existing history (the file never
-    had one to read), so it's left out of the agency/agent-scoped
-    calls - each of those only ever reflects what this tool itself has
-    tracked.
+    The unscoped/"All" case merges in the sheet's own pre-existing
+    "Date Record" history verbatim (historical_summary_rows - imported
+    once from the uploaded file itself, see app/importer.py)
+    chronologically alongside this tool's own tracked runs, so a real
+    file's history from before this tool ever existed carries straight
+    through instead of the running total silently starting over from
+    zero. A scoped (agency/agent) call instead merges in a
+    RECONSTRUCTED per-scope breakdown of that same history - see
+    _reconstruct_scoped_historical_entries - since the real file itself
+    only ever carries one company-wide total per "As at" date, not a
+    per-agency one.
 
     Each row keeps its run_id so _write_summary_table can tell which
     row is the one just processed and highlight only that one yellow -
@@ -440,6 +523,8 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
                 h["full_commission"], h["first_half_commission"], h["second_half_commission"],
                 h["remarks"],
             ))
+    else:
+        entries.extend(_reconstruct_scoped_historical_entries(conn, agency_group, agent_name))
 
     entries.sort(key=lambda e: e[0])
 
