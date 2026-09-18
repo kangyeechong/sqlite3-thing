@@ -82,6 +82,43 @@ def test_report_has_an_all_sheet_and_a_sheet_per_agency(tmp_path):
     assert po_numbers == {60001, 60002}
 
 
+def test_no_agency_sheet_is_pushed_to_the_very_end(tmp_path):
+    """
+    "(No Agency)" is a fallback bucket for POs with no agency code at
+    all, not a real agency - it must always be the LAST sheet, not
+    interleaved wherever its POs happen to fall by PO No (confirmed by
+    the real PO here having the smallest PO No of the two, so it would
+    otherwise sort first).
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60040, "Customer ID": "CUSTNA1", "Customer Name": "Customer NA1",
+            "Remarks": "Cancelled PO",
+            # no Agency Code at all
+        },
+        {
+            "No": 2, "PO No": 60041, "Customer ID": "CUSTNA2", "Customer Name": "Customer NA2",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert workbook.sheetnames[-1] == "(No Agency)"
+
+
 def test_cancelled_po_stays_visible_beige_with_commission_cleared(tmp_path):
     """
     The report is a standing ledger, not a due-items list - a cancelled

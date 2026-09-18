@@ -1010,6 +1010,13 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     for row in rows:
         groups.setdefault(row["agency_group"], []).append(row)
 
+    # "(No Agency)" is a fallback bucket, not a real agency - moved to
+    # the very end of the sheet order (regardless of where its POs
+    # happen to fall by PO No) so it reads as the leftover/miscellany
+    # tab it is, rather than being interleaved with real agencies.
+    if "(No Agency)" in groups:
+        groups["(No Agency)"] = groups.pop("(No Agency)")
+
     split_column_count = _SPLIT_COLUMNS_START + len(_SPLIT_COLUMN_GROUPS) * 3 - 1
 
     used_titles = {"All"}
