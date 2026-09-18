@@ -308,7 +308,10 @@ def annotate_aor_file(file_path, output):
     rows are included), colored green, and every receipt whose own
     (INST X/Y) tag is installment 1 or 6 specifically, colored yellow.
     Confirmed against a real annotated sample - these are the exact
-    colors and grouping the business already uses.
+    colors and grouping the business already uses. Sorted by PO No
+    ascending (20260299, 20260300, ...) rather than the file's own row
+    order, so every row for one PO sits together and the sheet reads
+    top to bottom in order.
 
     Reads the uploaded file twice on purpose: once with data_only=True
     to classify rows and pull out values (the same read every other
@@ -342,7 +345,7 @@ def annotate_aor_file(file_path, output):
     # they appear in the file - same spirit as a human scrolling
     # through it top to bottom and filtering as they go.
     headers = None
-    filtered_rows = []  # list of (row_values, fill)
+    filtered_rows = []  # list of (po_no, row_values, fill)
     for sheet in aor_sheets:
         header_row_num = _find_header_row(sheet)
         if header_row_num is None:
@@ -360,7 +363,12 @@ def annotate_aor_file(file_path, output):
             elif _is_positive_whole_number(po_no) and int(po_no) in full_payment_pos:
                 fill = _GREEN_FILL
             if fill is not None:
-                filtered_rows.append(([raw_row.get(h) for h in sheet_headers], fill))
+                filtered_rows.append((po_no, [raw_row.get(h) for h in sheet_headers], fill))
+
+    # Sorted by PO No ascending (20260299, 20260300, ...) rather than
+    # the file's own row order, so a PO's group of rows is easy to
+    # find and everything reads in one consistent order.
+    filtered_rows.sort(key=lambda entry: entry[0] if _is_positive_whole_number(entry[0]) else float("inf"))
 
     output_workbook = openpyxl.load_workbook(file_path)  # untouched - this is what gets kept as-is
     filtered_sheet_name = "Filtered"
@@ -373,7 +381,7 @@ def annotate_aor_file(file_path, output):
     if headers is not None:
         for col, header in enumerate(headers, start=1):
             filtered_sheet.cell(row=1, column=col, value=header)
-        for row_offset, (values, fill) in enumerate(filtered_rows, start=2):
+        for row_offset, (_, values, fill) in enumerate(filtered_rows, start=2):
             for col, value in enumerate(values, start=1):
                 cell = filtered_sheet.cell(row=row_offset, column=col, value=value)
                 cell.fill = fill

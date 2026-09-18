@@ -472,3 +472,40 @@ def test_annotate_aor_file_excludes_non_matching_rows_from_the_filtered_sheet(tm
 
     workbook = openpyxl.load_workbook(output_path)
     assert _filtered_rows(workbook) == []
+
+
+def test_annotate_aor_file_sorts_by_po_no_ascending(tmp_path):
+    """The filtered sheet reads by PO No, not by the file's own row
+    order - 20260299 before 20260300, etc - with each PO's own rows
+    (e.g. a PARTIAL/BALANCE pair) still kept together."""
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        # Deliberately out of PO order in the source file.
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-D-0001", "PO No": 20260300,
+            "Customer ID": "CUSTD1", "Customer Name": "Customer D1",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 7),
+            "Reference No": "TRF 07/08/2026 (INST 01/24)",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-D-0002", "PO No": 20260299,
+            "Customer ID": "CUSTD2", "Customer Name": "Customer D2",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 7),
+            "Reference No": "C M0001 PATRIAL PAYMENT",
+        },
+        {
+            "No": 3, "Acknowledgment Receipt No": "RC-D-0003", "PO No": 20260299,
+            "Customer ID": "CUSTD2", "Customer Name": "Customer D2",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 8),
+            "Reference No": "C M0002 BALANCE PAYMENT",
+        },
+    ])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path))
+
+    workbook = openpyxl.load_workbook(output_path)
+    filtered_sheet = workbook["Filtered"]
+    po_col = AOR_HEADERS.index("PO No") + 1
+    po_nos = [filtered_sheet.cell(row=r, column=po_col).value for r in range(2, filtered_sheet.max_row + 1)]
+    assert po_nos == [20260299, 20260299, 20260300]
