@@ -21,7 +21,23 @@ from . import commission, parsing, rules
 # The importer doesn't hardcode "row 6" though: it searches for the row
 # containing "PO No", so a sheet with an extra or missing blank row
 # doesn't silently misread everything as garbage.
-_REQUIRED_HEADERS = ("No", "PO No", "Customer ID")
+#
+# "Niche/Tablet Price (RM)" is included specifically so this can't also
+# match the AOR (Acknowledgment of Receipt) export - a real sample of
+# that file shares "No", "PO No", and "Customer ID" too (it's the
+# uploaded-payment-receipts list, not a sale-price sheet), and used to
+# pass this exact check, getting silently imported as if every AOR
+# receipt were its own PO - see _AOR_SIGNATURE_HEADER below for the
+# other half of that fix (a specific, actionable error instead of a
+# corrupted ledger).
+_REQUIRED_HEADERS = ("No", "PO No", "Customer ID", "Niche/Tablet Price (RM)")
+
+# A header this specific to the AOR export - confirmed from a real
+# sample, never present in a genuine Commission Base Report - used only
+# to give a clear, specific error when someone uploads the wrong file
+# here (see import_master_report), rather than a generic "couldn't find
+# a header row" message that doesn't explain what actually went wrong.
+_AOR_SIGNATURE_HEADER = "Acknowledgment Receipt No"
 
 # The trailing "Date Record" summary table's data rows look like
 # "As at 05/06/2026" - confirmed against the real file. Matched with a
@@ -69,6 +85,18 @@ def _is_master_shaped(sheet):
         return True
     except ValueError:
         return False
+
+
+def _looks_like_an_aor_export(sheet):
+    """True if this sheet carries the AOR export's own distinctive
+    header, whether or not it's Master-shaped - used only by
+    import_master_report to give a specific, actionable error when the
+    wrong file gets uploaded here, instead of a generic "couldn't find
+    a header row" message that doesn't say what actually went wrong."""
+    for row in sheet.iter_rows(min_row=1, max_row=30):
+        if _AOR_SIGNATURE_HEADER in [cell.value for cell in row]:
+            return True
+    return False
 
 
 def _find_date_record_header(sheet):
@@ -492,6 +520,12 @@ def import_master_report(conn, file_path, imported_by_user=None):
         None,
     )
     if master_sheet is None:
+        if any(_looks_like_an_aor_export(sheet) for sheet in workbook.worksheets):
+            raise ValueError(
+                f"'{file_path}' looks like an Acknowledgment of Receipt (AOR) "
+                f"export, not a Commission Base Report - this upload only "
+                f"accepts the Kenjin Master report."
+            )
         raise ValueError(
             f"No sheet in '{file_path}' has the expected headers "
             f"{_REQUIRED_HEADERS} - is this really a Commission Base Report?"
