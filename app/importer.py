@@ -154,7 +154,37 @@ def _read_historical_summary_rows(sheet):
     return rows
 
 
-def _flag_historically_accounted_commissions(conn, cutoff_iso_date, exclude_po_nos=()):
+def _existed_by_cutoff(contract, cutoff_iso_date):
+    """
+    True if this contract's own PO Date or Signature Date - a real,
+    immutable fact about when the sale actually happened, not when OUR
+    ledger happened to first import its row - falls on or before the
+    cutoff. Prefers Signature Date (when the customer actually signed,
+    a firmer signal the sale was final) and falls back to PO Date.
+
+    This is what _flag_historically_accounted_commissions uses to
+    decide whether a PO could possibly be money a historical cutoff
+    already accounts for, instead of "is this PO new to my local
+    contracts table" (a database-instance-local signal, not a business
+    fact - see the regression this replaced). A local database reset
+    (contracts cleared but historical_summary_rows/agencies left
+    alone, or a fresh ledger re-onboarding a company's full existing
+    book) makes every real, long-standing PO look "new to the ledger"
+    even though it may have existed for months - treating that as
+    equivalent to a genuinely new sale would wrongly re-detect the
+    company's entire historical commission total as newly due all over
+    again the moment the ledger is rebuilt.
+
+    Neither date on file is the safe direction to fail in: it means
+    this PO falls through to normal live detection instead of being
+    silently absorbed - the same "prefer over-detecting to silently
+    losing money" reasoning used throughout this module.
+    """
+    sale_date = contract["signature_date"] or contract["po_date"]
+    return bool(sale_date) and sale_date <= cutoff_iso_date
+
+
+def _flag_historically_accounted_commissions(conn, cutoff_iso_date):
     """
     Runs on every upload that has a trailing Date Record history at
     all (see import_master_report) - marks every trigger that would
@@ -175,22 +205,17 @@ def _flag_historically_accounted_commissions(conn, cutoff_iso_date, exclude_po_n
     payment is just as much already covered by the historical total as
     one whose date was already on file the first time.
 
-    `exclude_po_nos` should contain every PO that is both brand new to
-    the ledger as of THIS upload AND wasn't part of the upload that
-    established/advanced the cutoff being used here (see the caller in
-    import_master_report - it only excludes newly-inserted POs when
-    this upload's historical rows were all already on file from
-    before). A PO that didn't exist yet when the cutoff it's being
-    checked against was fixed cannot possibly be money that cutoff's
-    total already accounts for, no matter what its paid-date says -
-    flagging it here instead of letting it go through normal detection
-    would silently and permanently lose that commission (it would
-    never get a commission_event, and a flag is never unset anywhere
-    in this codebase). Regression case: an upload introduces a PO that
-    never appeared before, with a paid-date that happens to predate an
-    already-established cutoff (e.g. a late Kenjin entry for an older
-    sale) - without this exclusion, that PO's flag gets set here and
-    the commission never surfaces for review at all.
+    Every candidate must also pass _existed_by_cutoff: a PO whose own
+    sale date is AFTER the cutoff cannot possibly be money that
+    cutoff's total already accounts for, no matter what its paid-date
+    says - flagging it here instead of letting it go through normal
+    detection would silently and permanently lose that commission (it
+    would never get a commission_event, and a flag is never unset
+    anywhere in this codebase). Regression case: an upload introduces a
+    PO that never appeared before, with a paid-date that happens to
+    predate an already-established cutoff (e.g. a late Kenjin entry for
+    an older sale) - without this check, that PO's flag gets set here
+    and the commission never surfaces for review at all.
 
     Deliberately reuses full_payment_is_due/installment_1_is_due/
     installment_6_is_due (the exact same eligibility checks
@@ -207,9 +232,8 @@ def _flag_historically_accounted_commissions(conn, cutoff_iso_date, exclude_po_n
     """
     cutoff_date = datetime.date.fromisoformat(cutoff_iso_date)
     candidates = conn.execute("SELECT * FROM contracts WHERE status = 'active'").fetchall()
-    exclude_po_nos = set(exclude_po_nos)
     for contract in candidates:
-        if contract["po_no"] in exclude_po_nos:
+        if not _existed_by_cutoff(contract, cutoff_iso_date):
             continue
         # full_payment_is_due's At-Need branch deliberately ignores
         # `as_of` entirely (there's no cooling-off wait for At-Need -
@@ -549,12 +573,10 @@ def import_master_report(conn, file_path, imported_by_user=None):
     result = ImportResult(contracts_seen=len(all_fields))
     result.review_flags = skip_flags + _review_checks(conn, all_fields)
 
-    newly_inserted_po_nos = set()
     for fields in all_fields:
         is_new = _upsert_contract(conn, fields, now_iso)
         if is_new:
             result.contracts_new += 1
-            newly_inserted_po_nos.add(fields["po_no"])
         else:
             result.contracts_updated += 1
 
@@ -585,30 +607,20 @@ def import_master_report(conn, file_path, imported_by_user=None):
         if cursor.rowcount:
             result.historical_rows_imported += 1
 
-    # Whatever the sheet's history already accounts for (up to its own
-    # latest "As at" date, whether that history was just imported this
-    # time or an earlier upload already brought it in) must not also
-    # get detected as newly due below - that would double-count real
-    # money. Always uses the max of every row found on the sheet this
-    # time, not just newly-inserted ones, so a history that grows
-    # between uploads (a later file adding a newer "As at" row) still
-    # advances the cutoff correctly.
+    # Whatever the sheet's history already accounts for (up to the
+    # LATEST "As at" date ever recorded across every upload ever done,
+    # not just what's in this specific sheet) must not also get
+    # detected as newly due below - that would double-count real
+    # money. Read back from the database rather than only this
+    # upload's own historical_rows list: an older or stale file (one
+    # whose own trailing table hasn't caught up to a later "As at" row
+    # a previous upload already established) must not use a smaller
+    # cutoff than what's already known, or POs paid in that gap would
+    # wrongly fall through to fresh detection.
     if historical_rows:
-        cutoff = max(row["date_record"] for row in historical_rows)
-        # A PO brand new to the ledger this very upload must only be
-        # eligible for the historical-accounted flag when this same
-        # upload is also what established/advanced the cutoff - i.e.
-        # this is the same snapshot the "As at" total was computed
-        # from, so a PO newly seen in it plausibly was too. If instead
-        # the cutoff was already fixed by an EARLIER upload and this
-        # one merely repeats it, a brand-new PO here cannot possibly be
-        # money that already-fixed total accounted for (it didn't
-        # exist in the ledger yet when that total was set) - excluding
-        # it sends it through normal detection instead of silently and
-        # permanently losing it.
-        exclude_po_nos = newly_inserted_po_nos if result.historical_rows_imported == 0 else set()
-        _flag_historically_accounted_commissions(
-            conn, cutoff, exclude_po_nos=exclude_po_nos
-        )
+        cutoff = conn.execute(
+            "SELECT MAX(date_record) AS cutoff FROM historical_summary_rows"
+        ).fetchone()["cutoff"]
+        _flag_historically_accounted_commissions(conn, cutoff)
 
     return result

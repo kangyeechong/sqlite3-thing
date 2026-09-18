@@ -222,6 +222,8 @@ def test_historically_absorbed_trigger_still_shows_its_commission_amount(tmp_pat
             {
                 "No": 1, "PO No": 70010, "Customer ID": "CUSTHF1", "Customer Name": "Customer HF1",
                 "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00, already historically absorbed
+                "PO Date": settlement_date - datetime.timedelta(days=20),
+                "Signature Date": settlement_date - datetime.timedelta(days=20),
                 "Full Settlement Paid Date": settlement_date,
                 "Agency Code": "AC001",
             },
@@ -1016,14 +1018,13 @@ def test_summary_table_accumulates_across_multiple_runs(tmp_path):
     assert grand_total_row[4] == 4500.0
 
 
-def test_only_the_newest_summary_row_is_highlighted_yellow(tmp_path):
+def test_no_summary_row_is_highlighted_yellow(tmp_path):
     """
-    Confirmed against the real file: every prior "As at" row in the
-    Date Record table stays plain once it's been through a download -
-    only the row for whichever run this download is actually for (and
-    the grand total line under it) gets shaded yellow. History is never
-    overwritten, and yellow never spreads to rows that were already
-    there before this run.
+    Yellow highlighting on the Date Record summary table is
+    deliberately off for now (at the user's request, until the
+    AOR-driven workflow needs it) - every "As at" row and the grand
+    total line render plain, regardless of which run a download is
+    actually for. History is never overwritten either way.
     """
     db_path = _db_path(tmp_path)
 
@@ -1069,9 +1070,8 @@ def test_only_the_newest_summary_row_is_highlighted_yellow(tmp_path):
     assert len(summary_cells) == 3  # 2 "As at" rows + 1 grand total line
     run1_cell, run2_cell, total_cell = summary_cells
 
-    assert run1_cell.fill.start_color.rgb in ("00000000", None)  # older row: untouched
-    assert run2_cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")  # this run: yellow
-    assert total_cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")  # grand total: yellow too
+    for cell in (run1_cell, run2_cell, total_cell):
+        assert cell.fill.start_color.rgb in ("00000000", None)
 
 
 def _summary_grand_total(sheet):

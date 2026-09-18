@@ -796,12 +796,12 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
 
 def _write_summary_table(sheet, summary_rows, start_row, current_run_id):
     """
-    `current_run_id` is the commission_run this download is actually
-    for. Confirmed against the real file: every prior "As at" row in
-    this table stays plain - only the row for the run just processed
-    (and the grand total line under it, when that run is also the
-    latest one on file) gets shaded yellow, the same "newest addition"
-    meaning yellow has everywhere else in this report.
+    `current_run_id` identifies the commission_run this download is
+    actually for, kept here (unused for styling right now) for when
+    the AOR workflow needs to tell which "As at" row is the one it
+    just added. Yellow highlighting on this table is deliberately off
+    for now - see is_current_run below - until that AOR-driven
+    highlighting exists; every row renders plain in the meantime.
     """
     row_num = start_row
     sheet.cell(row=row_num, column=1, value="Summary").font = _TITLE_FONT
@@ -814,7 +814,6 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id):
 
     money_cols = {"Full Commission", "First Half Commission", "Second Half Commission", "Running Total"}
     for row in summary_rows:
-        is_current_run = row["run_id"] == current_run_id
         values = [
             row["date_record"], row["full_commission"], row["first_half_commission"],
             row["second_half_commission"], row["running_total"], row["remarks"],
@@ -824,8 +823,6 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id):
             cell.font = _BODY_FONT
             if label in money_cols:
                 cell.number_format = _MONEY_FORMAT
-            if is_current_run:
-                cell.fill = _YELLOW_FILL
         row_num += 1
 
     if summary_rows:
@@ -836,9 +833,6 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id):
         total_cell = sheet.cell(row=row_num, column=5, value=final_running_total)
         total_cell.font = _HEADER_FONT
         total_cell.number_format = _MONEY_FORMAT
-        if summary_rows[-1]["run_id"] == current_run_id:
-            label_cell.fill = _YELLOW_FILL
-            total_cell.fill = _YELLOW_FILL
         row_num += 1
 
     return row_num + 1
