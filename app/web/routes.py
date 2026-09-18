@@ -20,7 +20,7 @@ from flask import (
 from werkzeug.utils import secure_filename
 
 from ..db.connection import get_connection
-from ..pipeline import confirm_events, load_review, process_upload
+from ..pipeline import confirm_events, list_confirmed_runs, load_review, process_upload
 from ..report import TRIGGER_LABELS, generate_commission_run_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
 from .csrf import validate_csrf_token
@@ -131,6 +131,21 @@ def upload():
         commission_run_id=result["commission_run_id"],
         trigger_labels=TRIGGER_LABELS,
     )
+
+
+@bp.route("/reports")
+@login_required
+def reports():
+    """
+    Every past report that's ever been downloadable, newest first - the
+    only route that stays reachable regardless of what a given upload
+    does or doesn't raise. An upload that finds nothing newly due
+    leaves no link on its own results page (there's nothing new to
+    review that cycle), so without this page the last real report
+    would otherwise become unreachable the moment that happens.
+    """
+    runs = list_confirmed_runs(current_app.config["DB_PATH"])
+    return render_template("reports.html", runs=runs)
 
 
 @bp.route("/review/<int:run_id>")

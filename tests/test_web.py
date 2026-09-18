@@ -209,6 +209,53 @@ def test_upload_with_nothing_due_shows_message_and_no_review_link(client, tmp_pa
     assert b"Review &amp; confirm" not in response.data
 
 
+def test_past_reports_page_stays_reachable_after_an_upload_with_nothing_new(client, tmp_path):
+    """
+    Regression test: once an upload finds nothing newly due, its
+    results page has no download link at all (nothing new to review
+    that cycle) - before /reports existed, a real, already-confirmed
+    report from an earlier upload became completely unreachable the
+    moment that happened, with no way back to it anywhere in the app.
+    """
+    _login(client)
+
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 50010, "Customer ID": "CUSTWEB10", "Customer Name": "Web Test Customer 10",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": settlement_date,
+        "Agency Code": "AC001",
+    }])
+    response = _upload(client, xlsx1)
+    match = re.search(rb"/review/(\d+)", response.data)
+    run_id = int(match.group(1))
+    _confirm_all_pending(client, run_id)
+
+    # /reports must not be empty even before any upload finds nothing new -
+    reports_page = client.get("/reports")
+    assert reports_page.status_code == 200
+    assert f"/download/{run_id}".encode() in reports_page.data
+
+    # A second upload with nothing newly due leaves no link of its own,
+    # but the confirmed run from before must still be reachable via
+    # /reports (and the nav link on every page).
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 50011, "Customer ID": "CUSTWEB11", "Customer Name": "Web Test Customer 11",
+        # nothing paid yet
+    }])
+    second_response = _upload(client, xlsx2)
+    assert b"Past Reports" in second_response.data  # pointed at it directly, not left with a dead end
+
+    reports_page_2 = client.get("/reports")
+    assert f"/download/{run_id}".encode() in reports_page_2.data
+
+    download_response = client.get(f"/download/{run_id}")
+    assert download_response.status_code == 200
+
+
 def test_confirming_nothing_selected_leaves_it_pending(client, tmp_path):
     _login(client)
 

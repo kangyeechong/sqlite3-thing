@@ -27,7 +27,7 @@
   <nav>
     <strong>Agent Commission Tool</strong>
     {% if session.get('user_email') %}
-      <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.logout') }}">Log out</a></span>
+      <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.reports') }}">Past Reports</a> &middot; <a href="{{ url_for('web.logout') }}">Log out</a></span>
     {% endif %}
   </nav>
   {% with messages = get_flashed_messages() %}

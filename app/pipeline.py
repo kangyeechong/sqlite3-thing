@@ -89,6 +89,26 @@ def load_review(db_path, commission_run_id):
         return load_events_for_run(conn, commission_run_id)
 
 
+def list_confirmed_runs(db_path):
+    """
+    Every commission run that has at least one confirmed event, newest
+    first - what the "past reports" page lists, so a report is always
+    reachable even long after the upload that produced it, not just
+    from the one link shown right after that specific upload. A run
+    sitting fully pending (nothing confirmed on it yet) is left out,
+    same as everywhere else - there'd be nothing to download from it.
+    """
+    with _connect(db_path) as conn:
+        return conn.execute(
+            """
+            SELECT DISTINCT r.id, r.run_date, r.source_filename
+            FROM commission_runs r
+            JOIN commission_events e ON e.commission_run_id = r.id AND e.status = 'confirmed'
+            ORDER BY r.run_date DESC, r.id DESC
+            """
+        ).fetchall()
+
+
 def confirm_events(db_path, commission_run_id, event_ids, confirmed_by_user):
     """
     Confirms the chosen events (must belong to commission_run_id - an

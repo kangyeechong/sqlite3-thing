@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Past Reports{% endblock %}
+{% block content %}
+  <h1>Past Reports</h1>
+  <p class="muted">Every commission run that's had at least one commission confirmed on it. The Excel report always reflects the full ledger as it stands today, not a snapshot from when the run was first processed.</p>
+  {% if runs %}
+    <table>
+      <tr><th>Run Date</th><th>Source File</th><th></th></tr>
+      {% for run in runs %}
+        <tr>
+          <td>{{ run.run_date }}</td>
+          <td>{{ run.source_filename or "" }}</td>
+          <td><a href="{{ url_for('web.download', run_id=run.id) }}">Download Excel report</a></td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Nothing confirmed yet - once a commission run has at least one confirmed commission, it'll show up here.</p>
+  {% endif %}
+
+  <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>
+{% endblock %}

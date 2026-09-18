@@ -37,7 +37,7 @@
     </table>
     <p><a class="button" href="{{ url_for('web.review', run_id=commission_run_id) }}">Review &amp; confirm</a></p>
   {% else %}
-    <p class="muted">Nothing newly due this cycle - every contract in this file either has nothing new since the last upload, or isn't eligible yet.</p>
+    <p class="muted">Nothing newly due this cycle - every contract in this file either has nothing new since the last upload, or isn't eligible yet. Looking for a report to download? See <a href="{{ url_for('web.reports') }}">Past Reports</a>.</p>
   {% endif %}
 
   <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>
