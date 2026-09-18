@@ -126,22 +126,43 @@ def _read_historical_summary_rows(sheet):
     return rows
 
 
-def _flag_historically_accounted_commissions(conn, cutoff_iso_date):
+def _flag_historically_accounted_commissions(conn, cutoff_iso_date, exclude_po_nos=()):
     """
-    Runs right after a sheet's trailing Date Record history is
-    imported for the first time (see import_master_report) - marks
-    every trigger that would have legitimately been due on or before
-    that history's own last "As at" date as already flagged, WITHOUT
-    creating a commission_event for it.
+    Runs on every upload that has a trailing Date Record history at
+    all (see import_master_report) - marks every trigger that would
+    have legitimately been due on or before that history's own last
+    "As at" date as already flagged, WITHOUT creating a
+    commission_event for it.
 
     Why: that money is already counted in the aggregate historical
-    total just imported. Without this, process_commission_run (which
-    runs right after, in the same upload) would see these same PO's
-    paid-dates for the first time ever and detect them as newly due
-    too - double-counting real money. A paid-date strictly AFTER the
-    cutoff is left alone and still goes through normal detection, so a
-    genuinely new payment that happens to be in the same file as an
-    as-yet-unimported history isn't silently swallowed by it.
+    total. Without this, process_commission_run (which runs right
+    after, in the same upload) would see these same PO's paid-dates
+    and detect them as newly due too - double-counting real money. A
+    paid-date strictly AFTER the cutoff is left alone and still goes
+    through normal detection, so a genuinely new payment isn't
+    silently swallowed by it. Re-running this on every upload (not
+    just the one that first imports the history) matters because a PO
+    that already existed before the cutoff was established can still
+    have its paid-date field filled in on a *later* upload - that
+    payment is just as much already covered by the historical total as
+    one whose date was already on file the first time.
+
+    `exclude_po_nos` should contain every PO that is both brand new to
+    the ledger as of THIS upload AND wasn't part of the upload that
+    established/advanced the cutoff being used here (see the caller in
+    import_master_report - it only excludes newly-inserted POs when
+    this upload's historical rows were all already on file from
+    before). A PO that didn't exist yet when the cutoff it's being
+    checked against was fixed cannot possibly be money that cutoff's
+    total already accounts for, no matter what its paid-date says -
+    flagging it here instead of letting it go through normal detection
+    would silently and permanently lose that commission (it would
+    never get a commission_event, and a flag is never unset anywhere
+    in this codebase). Regression case: an upload introduces a PO that
+    never appeared before, with a paid-date that happens to predate an
+    already-established cutoff (e.g. a late Kenjin entry for an older
+    sale) - without this exclusion, that PO's flag gets set here and
+    the commission never surfaces for review at all.
 
     Deliberately reuses full_payment_is_due/installment_1_is_due/
     installment_6_is_due (the exact same eligibility checks
@@ -155,15 +176,13 @@ def _flag_historically_accounted_commissions(conn, cutoff_iso_date):
     commission even after the data is corrected. Same reasoning covers
     a cancelled/on_hold contract (status != 'active') and an At-Need
     case still missing its inurnment date.
-
-    This only ever needs to run once, the same moment the history
-    itself is imported for the first time - a later upload's normal
-    process_commission_run call is what picks up everything after the
-    cutoff from then on.
     """
     cutoff_date = datetime.date.fromisoformat(cutoff_iso_date)
     candidates = conn.execute("SELECT * FROM contracts WHERE status = 'active'").fetchall()
+    exclude_po_nos = set(exclude_po_nos)
     for contract in candidates:
+        if contract["po_no"] in exclude_po_nos:
+            continue
         # full_payment_is_due's At-Need branch deliberately ignores
         # `as_of` entirely (there's no cooling-off wait for At-Need -
         # see commission.py) - it only checks that an inurnment date
@@ -496,10 +515,12 @@ def import_master_report(conn, file_path, imported_by_user=None):
     result = ImportResult(contracts_seen=len(all_fields))
     result.review_flags = skip_flags + _review_checks(conn, all_fields)
 
+    newly_inserted_po_nos = set()
     for fields in all_fields:
         is_new = _upsert_contract(conn, fields, now_iso)
         if is_new:
             result.contracts_new += 1
+            newly_inserted_po_nos.add(fields["po_no"])
         else:
             result.contracts_updated += 1
 
@@ -540,6 +561,20 @@ def import_master_report(conn, file_path, imported_by_user=None):
     # advances the cutoff correctly.
     if historical_rows:
         cutoff = max(row["date_record"] for row in historical_rows)
-        _flag_historically_accounted_commissions(conn, cutoff)
+        # A PO brand new to the ledger this very upload must only be
+        # eligible for the historical-accounted flag when this same
+        # upload is also what established/advanced the cutoff - i.e.
+        # this is the same snapshot the "As at" total was computed
+        # from, so a PO newly seen in it plausibly was too. If instead
+        # the cutoff was already fixed by an EARLIER upload and this
+        # one merely repeats it, a brand-new PO here cannot possibly be
+        # money that already-fixed total accounted for (it didn't
+        # exist in the ledger yet when that total was set) - excluding
+        # it sends it through normal detection instead of silently and
+        # permanently losing it.
+        exclude_po_nos = newly_inserted_po_nos if result.historical_rows_imported == 0 else set()
+        _flag_historically_accounted_commissions(
+            conn, cutoff, exclude_po_nos=exclude_po_nos
+        )
 
     return result

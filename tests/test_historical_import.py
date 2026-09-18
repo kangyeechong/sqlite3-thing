@@ -241,6 +241,75 @@ def test_at_need_payment_after_cutoff_is_still_detected_not_lost(tmp_path):
     assert raised_pos == {90007}  # not silently swallowed by the historical cutoff
 
 
+def test_a_new_po_added_after_an_already_established_cutoff_is_not_silently_lost(tmp_path):
+    """
+    Regression test: _flag_historically_accounted_commissions used to
+    run its blanket "already accounted for" check against every active
+    contract on every upload that had any historical rows at all - with
+    no way to tell a PO that already existed when the cutoff was fixed
+    apart from one that is brand new to the ledger this very upload. A
+    PO that didn't exist yet back when a historical total was computed
+    cannot possibly be money that total already covers, no matter what
+    its own paid-date says - silently flagging it (with no
+    commission_event ever created, and a flag that's never unset
+    anywhere) would permanently lose that commission with nothing to
+    review. This reproduces exactly that: upload #1 establishes the
+    cutoff with one PO; upload #2 (same historical rows, nothing new
+    there) introduces a brand-new PO whose paid-date predates the
+    cutoff - it must still surface for review, not vanish.
+    """
+    cutoff = datetime.date(2026, 6, 5)
+    settlement_date = cutoff - datetime.timedelta(days=6)
+    xlsx_1 = tmp_path / "upload1.xlsx"
+    build_master_report(
+        xlsx_1,
+        [{
+            "No": 1, "PO No": 90008, "Customer ID": "CUSTH8", "Customer Name": "Customer H8",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+    db_path = _db_path(tmp_path)
+    result1 = process_upload(db_path, str(xlsx_1), run_date=datetime.date.today())
+    assert result1["import_result"].historical_rows_imported == 1
+    assert result1["raised_events"] == []
+
+    # Same historical rows (nothing new there), but a PO that has never
+    # appeared before - with a paid-date that predates the cutoff, as
+    # if it were a late Kenjin entry for an older sale.
+    xlsx_2 = tmp_path / "upload2.xlsx"
+    build_master_report(
+        xlsx_2,
+        [
+            {
+                "No": 1, "PO No": 90008, "Customer ID": "CUSTH8", "Customer Name": "Customer H8",
+                "Niche/Tablet Price (RM)": 10000,
+                "Full Settlement Paid Date": settlement_date,
+                "Agency Code": "AC001",
+            },
+            {
+                "No": 2, "PO No": 90009, "Customer ID": "CUSTH9", "Customer Name": "Customer H9",
+                "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00, brand new, must not be lost
+                "Full Settlement Paid Date": settlement_date,
+                "Agency Code": "AC001",
+            },
+        ],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+    result2 = process_upload(db_path, str(xlsx_2), run_date=datetime.date.today())
+    assert result2["import_result"].historical_rows_imported == 0  # already on file
+    raised_pos = {e["po_no"] for e in result2["raised_events"]}
+    assert raised_pos == {90009}  # the new PO must surface for review, not be silently lost
+
+
 def test_historical_rows_only_appear_on_the_unscoped_all_view(tmp_path):
     """There's no per-agency breakdown of the sheet's own pre-existing
     history to read - only the unscoped "All" summary includes it."""

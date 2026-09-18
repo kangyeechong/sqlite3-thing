@@ -136,6 +136,65 @@ def test_cancelled_po_stays_visible_beige_with_commission_cleared(tmp_path):
     assert sheet.cell(row=total_row_num, column=commission_col).value == 1500.0
 
 
+def test_a_po_cancelled_after_confirmation_is_excluded_from_the_movement_line_too(tmp_path):
+    """
+    Regression test: status is re-derived from Remarks on every
+    upload, not a one-way lock - a PO confirmed as due in one run can
+    later be marked cancelled. The Total row already excluded a
+    cancelled PO's commission, but the "movement as at" line (the
+    figure Accounts actually pays out for this cycle) and the cell's
+    yellow highlight did not - re-downloading an earlier run's report
+    after the PO was cancelled would still tell Accounts to pay out a
+    commission that no longer exists.
+    """
+    today = datetime.date.today()
+
+    xlsx1 = tmp_path / "run1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 60040, "Customer ID": "CUST240", "Customer Name": "Customer 240",
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+    db_path = _db_path(tmp_path)
+    result1 = process_upload(db_path, str(xlsx1), run_date=today)
+    confirm_all_pending(db_path, result1["commission_run_id"])
+
+    # A later upload marks the same PO cancelled - status is re-derived
+    # from Remarks every time, not a one-way lock.
+    xlsx2 = tmp_path / "run2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 60040, "Customer ID": "CUST240", "Customer Name": "Customer 240",
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": today,
+        "Agency Code": "AC001",
+        "Remarks": "Cancelled by customer request",
+    }])
+    process_upload(db_path, str(xlsx2), run_date=today)
+
+    # Re-download run 1's report now that the PO has since been
+    # cancelled - the standing ledger always reflects current status.
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result1["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AC001"]
+    headers, ac001_rows = _find_table_rows(sheet)
+    row = next(r for r in ac001_rows if r["PO No"] == 60040)
+    assert row["1st Half Commission (RM)"] is None  # cleared, cancelled
+
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    commission_col = headers.index("1st Half Commission (RM)") + 1
+    data_row_num = header_row_num + [r["PO No"] for r in ac001_rows].index(60040) + 1
+    total_row_num = header_row_num + len(ac001_rows) + 1
+    movement_row_num = total_row_num + 1
+
+    assert sheet.cell(row=total_row_num, column=commission_col).value == 0
+    assert sheet.cell(row=movement_row_num, column=commission_col).value == 0  # not 750 - cancelled money isn't a payout
+    cell_fill = sheet.cell(row=data_row_num, column=commission_col).fill.start_color.rgb
+    assert cell_fill not in ("00FFFF00", "FFFFFF00")  # not yellow - nothing to highlight as newly due
+
+
 def test_unpaid_po_stays_visible_with_no_color(tmp_path):
     """A PO with nothing paid yet must still appear - not omitted, and
     not colored, since nothing has happened on it either way."""

@@ -33,7 +33,7 @@ from openpyxl import Workbook
 from openpyxl.styles import Font, PatternFill
 from openpyxl.utils import get_column_letter
 
-from app import commission, rules
+from . import commission, rules
 
 _BODY_FONT = Font(name="Arial", size=11)
 _HEADER_FONT = Font(name="Arial", size=11, bold=True)
@@ -670,15 +670,20 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
             # figure confirmed in an earlier run now carries forward
             # plainly on every later download, not re-highlighted every
             # single time (see _load_master_rows).
-            if label in _HIGHLIGHT_COLUMNS and row.get(_CONFIRMED_THIS_RUN_KEY.get(key), False):
+            if (
+                not is_cancelled_row
+                and label in _HIGHLIGHT_COLUMNS
+                and row.get(_CONFIRMED_THIS_RUN_KEY.get(key), False)
+            ):
                 cell.fill = _YELLOW_FILL
         for key in totals:
             if is_cancelled_row and key in _COMMISSION_VALUE_KEYS:
                 continue
             totals[key] += row.get(key) or 0.0
-        for key, confirmed_key in _CONFIRMED_THIS_RUN_KEY.items():
-            if row.get(confirmed_key):
-                movement[key] += row.get(key) or 0.0
+        if not is_cancelled_row:
+            for key, confirmed_key in _CONFIRMED_THIS_RUN_KEY.items():
+                if row.get(confirmed_key):
+                    movement[key] += row.get(key) or 0.0
         row_num += 1
 
     # "Total" label sits under Customer Name - well clear of every
