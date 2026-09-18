@@ -170,6 +170,23 @@ def list_confirmed_runs(db_path):
         ).fetchall()
 
 
+def list_aor_uploads(db_path):
+    """
+    Every AOR export ever uploaded, newest first - so its annotated
+    copy (see app/aor.py's annotate_aor_file) stays downloadable from
+    the "Past Reports" page long after the upload that produced it,
+    not just from the one link shown right after that specific
+    upload. Deliberately not filtered by whether anything was newly
+    detected that run (unlike list_confirmed_runs above) - an AOR
+    upload's file is always worth being able to get back to, whether
+    or not it happened to raise anything new that time.
+    """
+    with _connect(db_path) as conn:
+        return conn.execute(
+            "SELECT id, filename, uploaded_at FROM aor_uploads ORDER BY uploaded_at DESC, id DESC"
+        ).fetchall()
+
+
 def confirm_events(db_path, commission_run_id, event_ids, confirmed_by_user):
     """
     Confirms the chosen events (must belong to commission_run_id - an

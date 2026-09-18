@@ -428,6 +428,35 @@ def test_aor_upload_with_nothing_new_points_to_past_reports(client, tmp_path):
     assert b"Past Reports" in response.data
 
 
+def test_past_reports_lists_aor_uploads_even_with_nothing_newly_due(client, tmp_path):
+    """
+    An AOR upload that raises nothing new leaves no commission_runs
+    row at all, so it can never show up in the "confirmed runs" table
+    above - but the file itself was still uploaded and should stay
+    reachable from Past Reports, not disappear the moment its results
+    page is left.
+    """
+    _login(client)
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-WEB-0004",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 99997, "Customer ID": "CUSTWEBAOR4", "Customer Name": "Web AOR Customer 4",
+        "Reference No": "HLB 000000 STAMP DUTY",
+    }])
+    _upload_aor(client, xlsx_aor, filename="my_aor_export.xlsx")
+
+    page = client.get("/reports")
+    assert page.status_code == 200
+    assert b"my_aor_export.xlsx" in page.data
+
+    match = re.search(rb"/download-aor-annotated/(\d+)", page.data)
+    assert match is not None, "Past Reports should link to the annotated download"
+    download_response = client.get(match.group(0).decode())
+    assert download_response.status_code == 200
+
+
 def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     _login(client)
 

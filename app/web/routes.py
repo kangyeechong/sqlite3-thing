@@ -21,7 +21,7 @@ from werkzeug.utils import secure_filename
 
 from ..aor import annotate_aor_file
 from ..db.connection import get_connection
-from ..pipeline import confirm_events, list_confirmed_runs, load_review, process_aor_upload, process_upload
+from ..pipeline import confirm_events, list_aor_uploads, list_confirmed_runs, load_review, process_aor_upload, process_upload
 from ..report import TRIGGER_LABELS, generate_commission_run_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
 from .csrf import validate_csrf_token
@@ -233,7 +233,8 @@ def reports():
     would otherwise become unreachable the moment that happens.
     """
     runs = list_confirmed_runs(current_app.config["DB_PATH"])
-    return render_template("reports.html", runs=runs)
+    aor_uploads = list_aor_uploads(current_app.config["DB_PATH"])
+    return render_template("reports.html", runs=runs, aor_uploads=aor_uploads)
 
 
 @bp.route("/review/<int:run_id>")
