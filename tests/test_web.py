@@ -260,6 +260,38 @@ def test_past_reports_page_stays_reachable_after_an_upload_with_nothing_new(clie
     assert download_response.status_code == 200
 
 
+def test_past_reports_surfaces_a_run_left_unconfirmed(client, tmp_path):
+    """
+    Regression test: a run that raised something newly due but was
+    never confirmed used to become completely unreachable the moment
+    you navigated away from its own results page - it doesn't qualify
+    for the "confirmed reports" table (nothing on it is confirmed yet),
+    so there was no link back to /review/<run_id> anywhere. The
+    "Awaiting review" section on /reports exists specifically so this
+    can't happen.
+    """
+    _login(client)
+
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+    xlsx = tmp_path / "upload.xlsx"
+    build_master_report(xlsx, [{
+        "No": 1, "PO No": 50020, "Customer ID": "CUSTWEB20", "Customer Name": "Web Test Customer 20",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": settlement_date,
+        "Agency Code": "AC001",
+    }])
+    response = _upload(client, xlsx)
+    match = re.search(rb"/review/(\d+)", response.data)
+    run_id = int(match.group(1))
+    # Deliberately never confirmed - simulating navigating away.
+
+    reports_page = client.get("/reports")
+    assert reports_page.status_code == 200
+    assert b"Awaiting review" in reports_page.data
+    assert f"/review/{run_id}".encode() in reports_page.data
+
+
 def test_confirming_nothing_selected_leaves_it_pending(client, tmp_path):
     _login(client)
 

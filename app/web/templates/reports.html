@@ -2,6 +2,25 @@
 {% block title %}Past Reports{% endblock %}
 {% block content %}
   <h1>Past Reports</h1>
+
+  <h2>Awaiting review</h2>
+  <p class="muted">Runs that raised something newly due but haven't been reviewed and confirmed yet - nothing here shows up in a downloaded report until you confirm it.</p>
+  {% if pending_runs %}
+    <table>
+      <tr><th>Run Date</th><th>Source File</th><th></th></tr>
+      {% for run in pending_runs %}
+        <tr>
+          <td>{{ run.run_date }}</td>
+          <td>{{ run.source_filename or "" }}</td>
+          <td><a class="button" href="{{ url_for('web.review', run_id=run.id) }}">Review &amp; confirm</a></td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">Nothing waiting on you right now.</p>
+  {% endif %}
+
+  <h2>Confirmed reports</h2>
   <p class="muted">Every commission run that's had at least one commission confirmed on it. The Excel report always reflects the full ledger as it stands today, not a snapshot from when the run was first processed.</p>
   {% if runs %}
     <table>

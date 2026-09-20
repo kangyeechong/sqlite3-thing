@@ -170,6 +170,29 @@ def list_confirmed_runs(db_path):
         ).fetchall()
 
 
+def list_runs_with_pending_events(db_path):
+    """
+    Every commission run that still has at least one pending (not yet
+    confirmed) event, newest first - the runs list_confirmed_runs above
+    deliberately leaves out. Without this, a run that raised something
+    newly due is only ever reachable via the one link shown right on
+    its own results page - navigate away before confirming it (or come
+    back a different day) and there was previously no way back to it
+    at all, since it doesn't qualify for "Past Reports" either (nothing
+    on it is confirmed yet). This is what makes /review/<run_id>
+    reachable again for exactly that case.
+    """
+    with _connect(db_path) as conn:
+        return conn.execute(
+            """
+            SELECT DISTINCT r.id, r.run_date, r.source_filename
+            FROM commission_runs r
+            JOIN commission_events e ON e.commission_run_id = r.id AND e.status = 'pending'
+            ORDER BY r.run_date DESC, r.id DESC
+            """
+        ).fetchall()
+
+
 def list_aor_uploads(db_path):
     """
     Every AOR export ever uploaded, newest first - so its annotated
