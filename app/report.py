@@ -520,13 +520,23 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     it) is highlighted. Historical rows carry run_id=None, which never
     matches a real commission_run_id, so they're never highlighted.
     """
+    # fb_lead_deduction is deliberately NOT summed in SQL as
+    # `net_price * deduction_pct` - that raw product is never rounded
+    # to the cent the way every other commission figure in this app is
+    # (see commission._calculate_commission's ROUND_HALF_UP - the same
+    # rounding _fb_deduction_amount and _reconstruct_scoped_historical_
+    # entries already use for this exact figure). Summed across many
+    # confirmed events, that unrounded-per-event total silently drifts
+    # away from the per-row deduction figures shown in this same
+    # report's own Agency/Agent split columns (_write_agency_agent_
+    # split_columns) and from the historically-reconstructed entries
+    # merged into this same table below - by as much as half a cent
+    # per event. Fetching the per-event fields here and rounding each
+    # one exactly like every other commission figure keeps this table
+    # internally consistent with the rest of the report.
     query = """
-        SELECT r.id AS run_id, r.run_date, e.trigger_type,
-               SUM({amount_expr}) AS total,
-               SUM(e.agent_amount) AS agent_total,
-               SUM(CASE WHEN a.commission_split_type = 'agency_agent_split' AND c.fb_lead_referred
-                        THEN c.net_price * (CASE WHEN e.trigger_type = 'full_payment' THEN ? ELSE ? END)
-                        ELSE 0 END) AS fb_deduction_total
+        SELECT r.id AS run_id, r.run_date, e.trigger_type, {amount_expr} AS amount,
+               e.agent_amount, a.commission_split_type, c.fb_lead_referred, c.net_price
         FROM commission_runs r
         JOIN commission_events e ON e.commission_run_id = r.id AND e.status = 'confirmed'
         JOIN contracts c ON c.po_no = e.po_no
@@ -541,12 +551,7 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
         # historically-absorbed side of this same table.
         amount_expr="COALESCE(e.agent_amount, e.amount)" if agent_name is not None else "e.amount"
     )
-    # agent_total/fb_deduction_total are only ever displayed on a
-    # split-group's own combined sheet (see _write_summary_table's
-    # split_group_name) - computed here unconditionally anyway since
-    # it's cheap and keeps this query's shape the same regardless of
-    # scope, rather than branching the SQL itself.
-    params = [rules.AW_FB_LEAD_DEDUCTION_FULL_PAYMENT_PCT, rules.AW_FB_LEAD_DEDUCTION_INSTALLMENT_PCT]
+    params = []
     if agency_group is not None:
         # Matches the same 3-level fallback _load_master_rows uses to
         # build the "(No Agency)" group key in the first place
@@ -561,10 +566,15 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     if agent_name is not None:
         query += " AND COALESCE(c.agent_name, '(unassigned)') = ?"
         params.append(agent_name)
-    query += " GROUP BY r.id, e.trigger_type ORDER BY r.run_date, r.id"
+    query += " ORDER BY r.run_date, r.id"
 
     cursor = conn.execute(query, params)
 
+    # agent_commission/fb_lead_deduction are only ever displayed on a
+    # split-group's own combined sheet (see _write_summary_table's
+    # split_group_name) - accumulated here unconditionally anyway since
+    # it's cheap and keeps this code's shape the same regardless of
+    # scope, rather than branching on it.
     by_run = {}
     run_order = []
     for row in cursor.fetchall():
@@ -575,9 +585,13 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
                 "agent_commission": 0.0, "fb_lead_deduction": 0.0,
             }
             run_order.append(run_id)
-        by_run[run_id][row["trigger_type"]] = row["total"] or 0.0
-        by_run[run_id]["agent_commission"] += row["agent_total"] or 0.0
-        by_run[run_id]["fb_lead_deduction"] += row["fb_deduction_total"] or 0.0
+        bucket = by_run[run_id]
+        bucket[row["trigger_type"]] += row["amount"] or 0.0
+        bucket["agent_commission"] += row["agent_amount"] or 0.0
+        if row["commission_split_type"] == "agency_agent_split" and row["fb_lead_referred"]:
+            deduction_pct = _DEDUCTION_PCT_BY_TRIGGER.get(row["trigger_type"])
+            if deduction_pct is not None:
+                bucket["fb_lead_deduction"] += commission._calculate_commission(row["net_price"], deduction_pct)
 
     # (sort_date, run_id_or_None, full, first_half, second_half, remarks,
     #  agent_commission, fb_lead_deduction)
@@ -615,13 +629,23 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     # first show a progressively larger, wrong figure.
     summary_rows = []
     for sort_date, run_id, full, first_half, second_half, remarks, agent_commission, fb_lead_deduction in entries:
-        running_total = full + first_half + second_half
+        # Rounded to the cent here, once, rather than left as whatever
+        # binary-float noise summing several already-rounded event
+        # amounts happens to produce (e.g. 1851.85 - 987.65 landing on
+        # 864.1999999999999) - every other money figure in this report
+        # is written as a clean 2-decimal value (see _write_table's own
+        # `round(totals[key], 2)`), and the exported .xlsx cells here
+        # should be too, not just look right thanks to the display-only
+        # number_format.
+        running_total = round(full + first_half + second_half, 2)
+        agent_commission = round(agent_commission, 2)
+        fb_lead_deduction = round(fb_lead_deduction, 2)
         summary_rows.append({
             "run_id": run_id,
             "date_record": f"As at {_format_short_date(sort_date)}",
-            "full_commission": full,
-            "first_half_commission": first_half,
-            "second_half_commission": second_half,
+            "full_commission": round(full, 2),
+            "first_half_commission": round(first_half, 2),
+            "second_half_commission": round(second_half, 2),
             "running_total": running_total,
             # Only meaningful (and only ever displayed - see
             # _write_summary_table's split_group_name) on a split
@@ -639,7 +663,7 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
             # breakdown of how much of the reduction already reflected
             # in running_total was FB-lead-related, not a further
             # subtraction to apply.
-            "total_for_group": running_total - agent_commission,
+            "total_for_group": round(running_total - agent_commission, 2),
             "remarks": remarks,
         })
     return summary_rows
@@ -1065,7 +1089,7 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
         # each row's own "running_total" above, this one genuinely is
         # cumulative, so it's summed fresh here rather than read off
         # the last row.
-        final_running_total = sum(row["running_total"] for row in summary_rows)
+        final_running_total = round(sum(row["running_total"] for row in summary_rows), 2)
         latest_date_label = summary_rows[-1]["date_record"].replace("As at ", "")
         # Whether THIS run actually added a row to this table (a run
         # confirmed on this download but scoped away from this sheet,
@@ -1084,11 +1108,11 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
             label_cell.fill = _YELLOW_FILL
             total_cell.fill = _YELLOW_FILL
         if split_group_name is not None:
-            final_agent_commission = sum(row["agent_commission"] for row in summary_rows)
-            final_fb_lead_deduction = sum(row["fb_lead_deduction"] for row in summary_rows)
+            final_agent_commission = round(sum(row["agent_commission"] for row in summary_rows), 2)
+            final_fb_lead_deduction = round(sum(row["fb_lead_deduction"] for row in summary_rows), 2)
             # Not minus final_fb_lead_deduction too - see the matching
             # comment on total_for_group above.
-            final_total_for_group = final_running_total - final_agent_commission
+            final_total_for_group = round(final_running_total - final_agent_commission, 2)
             for col, value in ((6, final_agent_commission), (7, final_fb_lead_deduction), (8, final_total_for_group)):
                 cell = sheet.cell(row=row_num, column=col, value=value)
                 cell.font = _HEADER_FONT

@@ -452,11 +452,21 @@ def _review_checks(conn, fields_list):
 
 
 def _upsert_contract(conn, fields, now_iso):
-    conn.execute(
-        "INSERT INTO customers (customer_id, name) VALUES (?, ?) "
-        "ON CONFLICT(customer_id) DO UPDATE SET name = excluded.name",
-        (fields["customer_id"], fields["customer_name"]),
-    )
+    # Guarded the same way the agency_code insert below is: customers.
+    # customer_id is TEXT PRIMARY KEY, and SQLite's uniqueness check
+    # never treats one NULL as equal to another, so
+    # "ON CONFLICT(customer_id)" never fires for a NULL customer_id -
+    # every blank-customer row (most visibly, every synthetic
+    # cancelled-PO placeholder from _detect_cancelled_po_gaps, which
+    # never has a customer at all) would otherwise insert its own new
+    # junk row into customers instead of being caught by the conflict
+    # clause, growing that table without bound across uploads.
+    if fields["customer_id"]:
+        conn.execute(
+            "INSERT INTO customers (customer_id, name) VALUES (?, ?) "
+            "ON CONFLICT(customer_id) DO UPDATE SET name = excluded.name",
+            (fields["customer_id"], fields["customer_name"]),
+        )
 
     if fields["agency_code"]:
         splits_by_agent = 0 if fields["agency_code"] in rules.AGENCIES_WITHOUT_PER_AGENT_SPLIT else 1
