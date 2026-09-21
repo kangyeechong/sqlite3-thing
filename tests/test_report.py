@@ -1058,13 +1058,14 @@ def test_summary_table_accumulates_across_multiple_runs(tmp_path):
     assert grand_total_row[4] == 4500.0  # the grand total line IS the true cumulative sum
 
 
-def test_no_summary_row_is_highlighted_yellow(tmp_path):
+def test_only_the_current_run_summary_row_is_highlighted_yellow(tmp_path):
     """
-    Yellow highlighting on the Date Record summary table is
-    deliberately off for now (at the user's request, until the
-    AOR-driven workflow needs it) - every "As at" row and the grand
-    total line render plain, regardless of which run a download is
-    actually for. History is never overwritten either way.
+    Confirmed against a real reference table: the "As at" row this
+    exact download's run added gets shaded yellow, same as the main
+    table's own "movement as at" row - a prior run's row (still
+    genuine history, never overwritten) stays plain. The grand total
+    line underneath is yellow too, exactly when this run actually
+    contributed a fresh row to this table.
     """
     db_path = _db_path(tmp_path)
 
@@ -1110,8 +1111,71 @@ def test_no_summary_row_is_highlighted_yellow(tmp_path):
     assert len(summary_cells) == 3  # 2 "As at" rows + 1 grand total line
     run1_cell, run2_cell, total_cell = summary_cells
 
-    for cell in (run1_cell, run2_cell, total_cell):
-        assert cell.fill.start_color.rgb in ("00000000", None)
+    assert run1_cell.fill.start_color.rgb in ("00000000", None)  # older history - stays plain
+    for cell in (run2_cell, total_cell):  # this download's own run - shaded yellow
+        assert cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
+
+
+def test_addendum_only_remarks_are_stripped_but_real_remarks_stay(tmp_path):
+    """
+    "With Addendum A" / "Without Addendum A" is a purely legal/admin
+    note from the Kenjin export that doesn't belong in the commission
+    report - confirmed with the business, it should come through
+    blank. Any other Remarks text (a real business note) must still
+    pass through unchanged, case-insensitively and regardless of
+    surrounding whitespace.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60050, "Customer ID": "CUST250", "Customer Name": "Customer 250",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001", "Remarks": "With Addendum A",
+        },
+        {
+            "No": 2, "PO No": 60051, "Customer ID": "CUST251", "Customer Name": "Customer 251",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001", "Remarks": "  without addendum a  ",
+        },
+        {
+            "No": 3, "PO No": 60052, "Customer ID": "CUST252", "Customer Name": "Customer 252",
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001", "Remarks": "Switch Lot Case From 20260221",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["All"]
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    headers = [c.value for c in sheet[header_row_num]]
+    po_col = headers.index("PO No") + 1
+    remarks_col = headers.index("Remarks") + 1
+
+    remarks_by_po = {}
+    r = header_row_num + 1
+    while True:
+        po = sheet.cell(row=r, column=po_col).value
+        if not isinstance(po, (int, float)):
+            break
+        remarks_by_po[int(po)] = sheet.cell(row=r, column=remarks_col).value
+        r += 1
+
+    assert remarks_by_po[60050] is None
+    assert remarks_by_po[60051] is None
+    assert remarks_by_po[60052] == "Switch Lot Case From 20260221"
 
 
 def _summary_grand_total(sheet):

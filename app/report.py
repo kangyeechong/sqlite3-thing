@@ -163,6 +163,28 @@ def _cooling_off_status(signature_date_str, run_date):
     return None
 
 
+# Exact-match only, not a substring purge - these are the only two
+# real values seen for this in the actual export, always as the
+# WHOLE remarks text on their own, never combined with anything else
+# worth keeping. A genuine remark that happens to mention "addendum"
+# as part of a longer note should still come through untouched.
+_ADDENDUM_ONLY_REMARKS = {"with addendum a", "without addendum a"}
+
+
+def _clean_remarks(remarks):
+    """
+    Strips a purely legal/admin note ("With Addendum A" / "Without
+    Addendum A") that doesn't belong in the commission report - not
+    something Accounts or an agent needs to see when reading this
+    file, confirmed with the business. Every other Remarks value
+    (cancellation notes, inurnment dates, Lot switches, ...) passes
+    through unchanged.
+    """
+    if remarks and str(remarks).strip().lower() in _ADDENDUM_ONLY_REMARKS:
+        return None
+    return remarks
+
+
 def _load_master_rows(conn, commission_run_id, run_date):
     """
     Every contract in the database, always - paid, still pending, or
@@ -251,7 +273,7 @@ def _load_master_rows(conn, commission_run_id, run_date):
             # set, so every other agency still gets its own single
             # sheet exactly as before this existed.
             "agency_group": r["agency_group"] or r["agency_code"] or "(No Agency)",
-            "remarks": r["remarks"],
+            "remarks": _clean_remarks(r["remarks"]),
             # No agency on file -> nothing to group by agent for
             # either; default to a flat listing rather than
             # splitting by agent.
@@ -968,11 +990,16 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
 def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_group_name=None):
     """
     `current_run_id` identifies the commission_run this download is
-    actually for, kept here (unused for styling right now) for when
-    the AOR workflow needs to tell which "As at" row is the one it
-    just added. Yellow highlighting on this table is deliberately off
-    for now - see is_current_run below - until that AOR-driven
-    highlighting exists; every row renders plain in the meantime.
+    actually for - whichever row was added by this exact run (matched
+    on run_id, set by _load_summary_rows) gets shaded yellow, the same
+    "what did THIS run add" highlighting convention used everywhere
+    else in this file (the main table's own "movement as at" row, the
+    Agency/Agent split columns' movement row). Confirmed against a
+    real reference table: the grand total row underneath is shaded
+    yellow too, whenever this run actually contributed a row - not
+    unconditionally, so a download for a run that only confirmed
+    something historical (no new "As at" row at all) leaves the grand
+    total plain like every other row.
 
     `split_group_name`: only ever passed for a split-type agency
     GROUP's own combined sheet (e.g. "AW Consultancy" - never a flat
@@ -1023,11 +1050,14 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
                 row["date_record"], row["full_commission"], row["first_half_commission"],
                 row["second_half_commission"], row["running_total"], row["remarks"],
             ]
+        is_current_run = current_run_id is not None and row["run_id"] == current_run_id
         for col, (label, value) in enumerate(zip(columns, values), start=1):
             cell = sheet.cell(row=row_num, column=col, value=value)
             cell.font = _BODY_FONT
             if label in money_cols or label.startswith("Total for "):
                 cell.number_format = _MONEY_FORMAT
+            if is_current_run:
+                cell.fill = _YELLOW_FILL
         row_num += 1
 
     if summary_rows:
@@ -1037,11 +1067,22 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
         # the last row.
         final_running_total = sum(row["running_total"] for row in summary_rows)
         latest_date_label = summary_rows[-1]["date_record"].replace("As at ", "")
+        # Whether THIS run actually added a row to this table (a run
+        # confirmed on this download but scoped away from this sheet,
+        # or one that only confirmed something already historically
+        # accounted for, adds no row here at all) - only then does the
+        # grand total line also shade yellow.
+        grand_total_is_current = any(
+            current_run_id is not None and row["run_id"] == current_run_id for row in summary_rows
+        )
         label_cell = sheet.cell(row=row_num, column=1, value=f"Total Sum of Commission Payout as at {latest_date_label}")
         label_cell.font = _HEADER_FONT
         total_cell = sheet.cell(row=row_num, column=5, value=final_running_total)
         total_cell.font = _HEADER_FONT
         total_cell.number_format = _MONEY_FORMAT
+        if grand_total_is_current:
+            label_cell.fill = _YELLOW_FILL
+            total_cell.fill = _YELLOW_FILL
         if split_group_name is not None:
             final_agent_commission = sum(row["agent_commission"] for row in summary_rows)
             final_fb_lead_deduction = sum(row["fb_lead_deduction"] for row in summary_rows)
@@ -1052,6 +1093,8 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
                 cell = sheet.cell(row=row_num, column=col, value=value)
                 cell.font = _HEADER_FONT
                 cell.number_format = _MONEY_FORMAT
+                if grand_total_is_current:
+                    cell.fill = _YELLOW_FILL
         row_num += 1
 
     return row_num + 1
