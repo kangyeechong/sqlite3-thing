@@ -1210,6 +1210,91 @@ def test_agency_agent_split_sheets_get_the_right_share_in_date_record(tmp_path):
     assert _summary_grand_total(workbook["Agent AW1"]) == 2000.0       # 1600 + 400, agent's own cut only
 
 
+def test_aw_consultancy_group_summary_has_agent_and_fb_lead_breakdown_columns(tmp_path):
+    """
+    Regression test: the AW Consultancy group's own combined sheet's
+    Date Record summary needs 3 extra columns beyond the standard
+    format - "Less Agent Commission", "Less FB leads from XEKL", and
+    "Total for AW Consultancy" - confirmed against a real per-cycle
+    reference table (RM12,397.50 / RM6,612.00 / RM0.00 / RM5,785.50).
+
+    Also locks in the correct formula for "Total for {group}": Running
+    Total minus Agent Commission ONLY, not minus the FB-lead deduction
+    too - `amount` (what Running Total is built from) already has the
+    deduction baked into agency_amount (see
+    commission.calculate_agency_agent_split), so subtracting it again
+    here would double-deduct it. fb_lead_referred is a purely manual
+    flag (no Excel column), so this test sets it directly rather than
+    through an upload - the real file's own reference sample never
+    happened to include an FB-lead-referred row, so this is the only
+    way to catch the double-subtraction bug the real sample couldn't.
+    """
+    import app.db.connection as db_connection
+    from app import commission
+    from app.report import generate_commission_run_report
+
+    db_path = str(tmp_path / "ledger.db")
+    db_connection.init_db(db_path)
+    conn = db_connection.get_connection(db_path)
+    today = datetime.date.today()
+    settlement = (today - datetime.timedelta(days=6)).isoformat()
+
+    conn.execute(
+        "INSERT INTO agencies (agency_code, splits_by_agent, commission_split_type, agency_group) "
+        "VALUES ('AC108-01', 1, 'agency_agent_split', 'AW Consultancy')"
+    )
+    # FB-lead-referred: agency 7% - 3% = 4% = 800, agent 8% = 1600, combined 2400
+    conn.execute(
+        "INSERT INTO contracts (po_no, agent_name, agency_code, net_price, case_type, status, "
+        "full_settlement_paid_date, fb_lead_referred) VALUES (93010, 'Agent AW1', 'AC108-01', "
+        "20000, 'pre_need', 'active', ?, 1)",
+        (settlement,),
+    )
+    # Not referred: agency 7% = 1400, agent 8% = 1600, combined 3000
+    conn.execute(
+        "INSERT INTO contracts (po_no, agent_name, agency_code, net_price, case_type, status, "
+        "full_settlement_paid_date, fb_lead_referred) VALUES (93011, 'Agent AW1', 'AC108-01', "
+        "20000, 'pre_need', 'active', ?, 0)",
+        (settlement,),
+    )
+    conn.commit()
+
+    run_id, raised = commission.process_commission_run(
+        conn, as_of=today, run_date=today, source_filename="test", created_by_user="test"
+    )
+    commission.confirm_commission_events(conn, [e["id"] for e in raised], "test")
+    conn.commit()
+
+    report_path = tmp_path / "report.xlsx"
+    generate_commission_run_report(conn, run_id, str(report_path))
+    conn.close()
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AW Consultancy"]
+
+    header_row = next(
+        row for row in sheet.iter_rows() if any(c.value == "Less Agent Commission" for c in row)
+    )
+    header_values = [c.value for c in header_row]
+    assert header_values[:9] == [
+        "DATE RECORD", "Full Commission", "First Half Commission", "Second Half Commission",
+        "Running Total", "Less Agent Commission", "Less FB leads from XEKL",
+        "Total for AW Consultancy", "Remarks",
+    ]
+
+    data_row = sheet[header_row[0].row + 1]
+    assert data_row[4].value == 5400.0  # Running Total: 2400 + 3000
+    assert data_row[5].value == 3200.0  # Less Agent Commission: 1600 + 1600
+    assert data_row[6].value == 600.0   # Less FB leads: 20000 * 3%, PO1 only
+    assert data_row[7].value == 2200.0  # Total for AW Consultancy: 5400 - 3200, NOT also - 600
+
+    total_row = sheet[header_row[0].row + 2]
+    assert total_row[4].value == 5400.0
+    assert total_row[5].value == 3200.0
+    assert total_row[6].value == 600.0
+    assert total_row[7].value == 2200.0
+
+
 def test_no_agency_sheet_gets_its_own_date_record_too(tmp_path):
     """
     Regression test: a contract with no Agency Code at all lands on a
