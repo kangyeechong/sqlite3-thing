@@ -369,11 +369,16 @@ def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name):
     1,698.75 / 16,785.00 / 1,462.50, matching every real "As at" row
     exactly, not just the RM65,493.00 grand total).
 
-    Uses the combined trigger amount (agency+agent together for a
-    split-type agency), matching the same convention the confirmed-
-    events query in _load_summary_rows already uses for a scoped call -
-    not the agent-only cut, so a per-agent summary is on the same
-    footing as a per-agency one.
+    Uses the combined trigger amount (agency+agent together) when
+    scoped to an agency/agency-group, matching the agency's own main
+    table on that sheet - but the AGENT's own cut when scoped to a
+    specific agent, for the same reason: a per-agent sheet's main
+    table already shows just that agent's money (see the historical
+    fallback in _load_master_rows), so this summary has to match it,
+    not the full agency+agent total. Confirmed against a real
+    per-agent reference table (RM1,292.00 / RM772.00 / RM440.00 per
+    cycle, RM2,504.00 total - exactly the agent's 8%/4% cut, not the
+    combined 15%/7.5%).
     """
     cutoffs = [r["date_record"] for r in conn.execute(
         "SELECT date_record FROM historical_summary_rows ORDER BY date_record"
@@ -423,7 +428,14 @@ def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name):
             bucket = buckets.setdefault(
                 cutoff, {"full_commission": 0.0, "first_half_commission": 0.0, "second_half_commission": 0.0}
             )
-            bucket[bucket_key] += event["amount"]
+            # Agent-scoped: the agent's own cut (falls back to the
+            # full amount for a flat agency, where agent_amount is
+            # NULL). Agency/group-scoped: the full combined amount,
+            # unchanged.
+            if agent_name is not None:
+                bucket[bucket_key] += event["agent_amount"] if event["agent_amount"] is not None else event["amount"]
+            else:
+                bucket[bucket_key] += event["amount"]
 
     return [
         (cutoff, None, b["full_commission"], b["first_half_commission"], b["second_half_commission"], None)
@@ -471,13 +483,22 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     matches a real commission_run_id, so they're never highlighted.
     """
     query = """
-        SELECT r.id AS run_id, r.run_date, e.trigger_type, SUM(e.amount) AS total
+        SELECT r.id AS run_id, r.run_date, e.trigger_type,
+               SUM({amount_expr}) AS total
         FROM commission_runs r
         JOIN commission_events e ON e.commission_run_id = r.id AND e.status = 'confirmed'
         JOIN contracts c ON c.po_no = e.po_no
         LEFT JOIN agencies a ON a.agency_code = c.agency_code
         WHERE 1=1
-    """
+    """.format(
+        # Agent-scoped: the agent's own cut (falls back to the full
+        # amount for a flat agency, where agent_amount is NULL).
+        # Agency/group-scoped and the unscoped "All" case: the full
+        # combined amount, unchanged - see _reconstruct_scoped_
+        # historical_entries above for the matching fix on the
+        # historically-absorbed side of this same table.
+        amount_expr="COALESCE(e.agent_amount, e.amount)" if agent_name is not None else "e.amount"
+    )
     params = []
     if agency_group is not None:
         # Matches the same 3-level fallback _load_master_rows uses to

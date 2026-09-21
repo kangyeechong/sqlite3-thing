@@ -1164,6 +1164,52 @@ def test_every_sheet_gets_its_own_date_record_scoped_to_itself(tmp_path):
     assert _summary_grand_total(workbook["Agent Beta"]) == 3000.0
 
 
+def test_agency_agent_split_sheets_get_the_right_share_in_date_record(tmp_path):
+    """
+    Regression test: for an agency_agent_split group (AW Consultancy),
+    the group's own combined sheet's Date Record summary must total
+    the FULL agency+agent amount (matching its main table, which shows
+    the combined figure) - but the per-agent sheet's own summary must
+    total just that AGENT's cut (matching ITS main table, which
+    already shows only the agent's own money, not the combined total -
+    see the historical fallback in _load_master_rows). Before this
+    fix, both used the combined amount, so a per-agent sheet's Date
+    Record grand total silently disagreed with its own PO rows right
+    above it - confirmed against a real per-agent reference table
+    (RM2,504.00 total, the agent's 8%/4% cut, not the combined
+    RM4,695.00 15%/7.5%).
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {
+            "No": 1, "PO No": 60040, "Customer ID": "CUST240", "Customer Name": "Customer 240",
+            "Niche/Tablet Price (RM)": 20000,  # full: agency 7% = 1400, agent 8% = 1600
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC108-01", "FCC/Agent": "Agent AW1",
+        },
+        {
+            "No": 2, "PO No": 60041, "Customer ID": "CUST241", "Customer Name": "Customer 241",
+            "Niche/Tablet Price (RM)": 10000,  # installment 1: agency 3.5% = 350, agent 4% = 400
+            "First Instalment Paid Date": settlement_date,
+            "Agency Code": "AC108-01", "FCC/Agent": "Agent AW1",
+        },
+    ])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert _summary_grand_total(workbook["AW Consultancy"]) == 3750.0  # 1400+1600 + 350+400, combined
+    assert _summary_grand_total(workbook["Agent AW1"]) == 2000.0       # 1600 + 400, agent's own cut only
+
+
 def test_no_agency_sheet_gets_its_own_date_record_too(tmp_path):
     """
     Regression test: a contract with no Agency Code at all lands on a
