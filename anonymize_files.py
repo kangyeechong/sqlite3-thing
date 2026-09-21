@@ -79,12 +79,23 @@ def _matches(header, target_set):
 
 
 def _find_header_hit_blocks(sheet):
-    """Every header row in this sheet's first 30 rows containing any
-    target header, as (header_row_num, [(column, field), ...]) - the
-    same "search, don't assume a fixed row number" approach the rest
-    of the tool uses, since title-block height varies between file
-    types."""
-    blocks = []
+    """The FIRST header row in this sheet's first 30 rows containing
+    any target header, as [(header_row_num, [(column, field), ...])]
+    (a one-item list, or empty) - the same "search, don't assume a
+    fixed row number" approach the rest of the tool uses, since
+    title-block height varies between file types.
+
+    Deliberately stops at the first match rather than collecting every
+    matching row: every real file type here (Master Report, AOR, the
+    payout reference file) has exactly one header row per sheet, and a
+    LATER row that merely happens to contain a cell whose value equals
+    a header label - a placeholder/dummy record, a stray repeated
+    label, anything - must never be treated as a second, independent
+    header block. Confirmed by reproduction: treating it as one did
+    exactly that, spawning a bogus block that reprocessed everything
+    below it a second time and silently overwrote already-correct fake
+    values with new ones.
+    """
     for row in sheet.iter_rows(min_row=1, max_row=30):
         header_hits = []
         for cell in row:
@@ -97,8 +108,8 @@ def _find_header_hit_blocks(sheet):
             elif _matches(cell.value, _AGENT_NAME_HEADERS):
                 header_hits.append((cell.column, "agent_name"))
         if header_hits:
-            blocks.append((row[0].row, header_hits))
-    return blocks
+            return [(row[0].row, header_hits)]
+    return []
 
 
 def collect_names(path, pools):
@@ -168,8 +179,19 @@ def anonymize_workbook(path, pools, pattern, lookup):
                         continue
                     cell.value = pools[field].get(cell.value)
 
+        # A header row's own label cells ("Customer Name", "FCC/Agent",
+        # ...) must never be candidates for this scrub, whatever
+        # matched them into the pool - if some real customer or agent's
+        # actual name happens to collide with a header label text (not
+        # impossible with a placeholder/test record in real business
+        # data), scrubbing that name everywhere would otherwise corrupt
+        # the genuine header row itself, which is structural, not a
+        # stray mention worth hunting down.
+        header_row_nums = {header_row_num for header_row_num, _ in header_blocks}
         sheet.title = _scrub_text(sheet.title, pattern, lookup)
         for row in sheet.iter_rows():
+            if row[0].row in header_row_nums:
+                continue
             for cell in row:
                 if isinstance(cell, MergedCell):
                     continue
