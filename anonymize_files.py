@@ -24,6 +24,7 @@ import argparse
 import os
 
 import openpyxl
+from openpyxl.cell.cell import MergedCell
 
 # Header text (case-insensitive, exact match) that marks a column as
 # holding a customer/agent name or ID worth anonymizing. If the
@@ -93,6 +94,13 @@ def anonymize_workbook(path, pools):
             for data_row in sheet.iter_rows(min_row=header_row_num + 1):
                 for col_idx, field in header_hits:
                     cell = sheet.cell(row=data_row[0].row, column=col_idx)
+                    # A cell that's part of a merged range (other than
+                    # its top-left anchor) has no independent value to
+                    # set - real business spreadsheets merge cells for
+                    # formatting all the time, so this is expected, not
+                    # an error condition worth stopping the run over.
+                    if isinstance(cell, MergedCell):
+                        continue
                     cell.value = pools[field].get(cell.value)
 
     return workbook, found_columns
