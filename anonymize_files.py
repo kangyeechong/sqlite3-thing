@@ -153,14 +153,28 @@ def _scrub_text(text, pattern, lookup):
 
 def anonymize_workbook(path, pools, pattern, lookup):
     """
-    Second pass, on the real (not data_only) workbook so it's the copy
-    actually saved: replaces every header-matched column's values via
+    Second pass: replaces every header-matched column's values via
     `pools` (already fully populated by collect_names, so this only
     ever looks up existing mappings, never creates new ones), then
     scrubs every sheet's own tab name and every other text cell for
     any stray occurrence of a known real name.
+
+    Loaded with data_only=True on purpose, flattening any formula
+    cell (the real "overall commission" reference file computes
+    things like Nett Price and 1st Half Commission with live formulas
+    such as "=H7-I7-J7") to its last-calculated value. The alternative
+    - keeping the formula text - sounds safer but isn't: openpyxl
+    doesn't recalculate formulas itself, and when it re-saves a
+    workbook it doesn't carry along the cached result either, so a
+    formula cell would come back completely BLANK the moment anything
+    other than real Excel opens the saved copy (confirmed - this is
+    exactly what happened testing this). Since the whole point of an
+    anonymized copy is being a stable, tool-agnostic reference to
+    compare against, a plain static value that reads correctly
+    everywhere is strictly better here than a formula that only
+    resolves correctly in one specific program.
     """
-    workbook = openpyxl.load_workbook(path)
+    workbook = openpyxl.load_workbook(path, data_only=True)
     found_columns = []
 
     for sheet in workbook.worksheets:
