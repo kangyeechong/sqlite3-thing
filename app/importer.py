@@ -66,6 +66,13 @@ class ImportResult:
     # historical_summary_rows.date_record's UNIQUE constraint), not an
     # error or something to re-derive.
     historical_rows_imported: int = 0
+    # How many PO numbers were missing from the sequence between the
+    # lowest and highest PO No seen in this upload - each one gets a
+    # synthetic cancelled contract row (see _detect_cancelled_po_gaps)
+    # so it's tracked instead of silently vanishing. Not counted in
+    # contracts_seen/contracts_new, since those describe what was
+    # literally in the uploaded file, not something inferred from it.
+    cancelled_po_gaps_detected: int = 0
 
 
 def _find_header_row(sheet):
@@ -518,6 +525,74 @@ def _upsert_contract(conn, fields, now_iso):
     return existing is None
 
 
+# A gap this large is far more likely to be a data-entry mistake (an
+# extra digit typed into one PO No) than several hundred consecutive
+# real cancellations - past this size, _detect_cancelled_po_gaps stops
+# and flags the whole range for a human instead of trying to insert
+# that many synthetic rows.
+_MAX_AUTO_FILLED_GAP = 500
+
+
+def _detect_cancelled_po_gaps(conn, po_nos_this_upload, now_iso):
+    """
+    A PO No missing from the sequence between the lowest and highest
+    number seen in this upload always means that PO was cancelled
+    before it was ever finalized - confirmed with the business (never
+    a reserved-but-unused number, a different office's own numbering,
+    or simply a PO that hasn't reached this file yet - that last case
+    is exactly why this is scoped to the min...max range actually seen
+    THIS upload, never extrapolated past the highest number: a number
+    beyond that hasn't happened yet, that's not a gap).
+
+    Every missing number not already a real contract (from this or any
+    earlier upload) gets a synthetic placeholder row - no customer, no
+    price, status 'cancelled', Remarks "Cancelled PO" - built the exact
+    same way a real row would be (via _build_contract_fields, so
+    detect_status/case_type/etc. all run identically) so it shows up
+    in the report exactly like any other cancelled PO: a beige row,
+    excluded from commission detection, instead of just disappearing.
+
+    If a real row for one of these numbers shows up on a later upload
+    (the business un-cancels it, or this was a mistake), the normal
+    upsert path overwrites this placeholder with the real data, same
+    as updating any other existing PO - nothing special needed for
+    that to work correctly.
+    """
+    if not po_nos_this_upload:
+        return []
+
+    lowest, highest = min(po_nos_this_upload), max(po_nos_this_upload)
+    if highest - lowest > _MAX_AUTO_FILLED_GAP:
+        return [ReviewFlag(
+            None, "po_range_too_wide_to_scan",
+            f"PO No ranges from {lowest} to {highest} in this upload - too wide a span to "
+            f"safely check for cancelled-PO gaps (likely a typo in one PO No rather than "
+            f"{highest - lowest} real cancellations). Skipped; check for a data entry error.",
+        )]
+    missing = [n for n in range(lowest, highest + 1) if n not in po_nos_this_upload]
+    if not missing:
+        return []
+
+    already_real = {
+        row["po_no"] for row in conn.execute(
+            "SELECT po_no FROM contracts WHERE po_no BETWEEN ? AND ?", (lowest, highest)
+        )
+    }
+
+    flags = []
+    for po_no in missing:
+        if po_no in already_real:
+            continue  # already a real contract from an earlier upload - not a gap after all
+        fields = _build_contract_fields({"PO No": po_no, "Remarks": "Cancelled PO"})
+        _upsert_contract(conn, fields, now_iso)
+        flags.append(ReviewFlag(
+            po_no, "inferred_cancelled_po",
+            f"PO No {po_no} is missing from the sequence (between {lowest} and {highest} "
+            f"in this upload) - added as a cancelled PO so it's tracked, not silently skipped.",
+        ))
+    return flags
+
+
 def import_master_report(conn, file_path, imported_by_user=None):
     """
     Reads every sheet in the workbook that looks like a Master report
@@ -580,6 +655,15 @@ def import_master_report(conn, file_path, imported_by_user=None):
             result.contracts_new += 1
         else:
             result.contracts_updated += 1
+
+    # Runs after every real row above is already in the database, so a
+    # gap only ever means "genuinely missing from this upload" - never
+    # a false positive against a PO this same upload was about to add.
+    gap_flags = _detect_cancelled_po_gaps(conn, {f["po_no"] for f in all_fields}, now_iso)
+    result.review_flags.extend(gap_flags)
+    # Excludes the single "too wide to scan" warning flag, which
+    # represents zero actual gaps filled, not one.
+    result.cancelled_po_gaps_detected = sum(1 for f in gap_flags if f.check == "inferred_cancelled_po")
 
     # The sheet's own trailing "Date Record" history, imported once and
     # kept forever - see historical_summary_rows in schema.sql. Every

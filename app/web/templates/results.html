@@ -7,6 +7,9 @@
   {% if import_result.historical_rows_imported %}
     <p class="muted">Also imported {{ import_result.historical_rows_imported }} historical Date Record entr{{ "y" if import_result.historical_rows_imported == 1 else "ies" }} already on this sheet - now part of the permanent record, kept forever.</p>
   {% endif %}
+  {% if import_result.cancelled_po_gaps_detected %}
+    <p class="muted">{{ import_result.cancelled_po_gaps_detected }} PO No{{ "" if import_result.cancelled_po_gaps_detected == 1 else "s" }} missing from the sequence in this file, added as cancelled so they're tracked - see the import review panel below for which ones.</p>
+  {% endif %}
 
   <h2>Import review panel</h2>
   {% if import_result.review_flags %}
