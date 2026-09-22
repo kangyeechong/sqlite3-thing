@@ -535,9 +535,21 @@ def _upsert_contract(conn, fields, now_iso):
             full_settlement_paid_date = COALESCE(excluded.full_settlement_paid_date, contracts.full_settlement_paid_date),
             first_installment_paid_date = COALESCE(excluded.first_installment_paid_date, contracts.first_installment_paid_date),
             sixth_installment_paid_date = COALESCE(excluded.sixth_installment_paid_date, contracts.sixth_installment_paid_date),
-            full_commission_paid_date = excluded.full_commission_paid_date,
-            installment_1_commission_paid_date = excluded.installment_1_commission_paid_date,
-            installment_6_commission_paid_date = excluded.installment_6_commission_paid_date,
+            -- Same COALESCE reasoning as the three paid-date columns
+            -- above, and for the same underlying reason: these three
+            -- are also hand-typed onto the real Master Report by
+            -- Accounts once they've actually sent the money (see the
+            -- schema.sql comment on these columns), not something
+            -- Kenjin's own export retains on a fresh re-generation. A
+            -- blind overwrite here has the exact same failure mode the
+            -- three paid-date columns had - a later Master report
+            -- re-upload for a PO Accounts already marked as commission-
+            -- paid would silently wipe that paid-date back to NULL,
+            -- making an already-paid commission look unpaid on the next
+            -- downloaded report.
+            full_commission_paid_date = COALESCE(excluded.full_commission_paid_date, contracts.full_commission_paid_date),
+            installment_1_commission_paid_date = COALESCE(excluded.installment_1_commission_paid_date, contracts.installment_1_commission_paid_date),
+            installment_6_commission_paid_date = COALESCE(excluded.installment_6_commission_paid_date, contracts.installment_6_commission_paid_date),
             remarks = excluded.remarks,
             updated_at = excluded.updated_at
         """,

@@ -235,6 +235,49 @@ def test_a_paid_date_confirmed_by_aor_survives_a_later_master_report_reupload(tm
     conn.close()
 
 
+def test_a_commission_paid_date_hand_typed_by_accounts_survives_a_later_master_report_reupload(tmp_path):
+    """
+    Same bug, same fix, for the three *_commission_paid_date columns:
+    Accounts hand-types Full Commission Paid Date / 1st Half Commission
+    Paid Date / Balance Half Commission Paid Date directly onto the real
+    Master Report once they've actually sent the money (see the
+    schema.sql comment on these columns) - Kenjin's own export doesn't
+    retain that on a fresh re-generation, exactly like the three paid-
+    date columns above. A later Master report re-upload for the same PO
+    must not blindly overwrite an already-recorded commission-paid-date
+    back to NULL.
+    """
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 80060, "Customer ID": "CUSTG12", "Customer Name": "Customer G12", "Agency Code": "AC001",
+    }])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx1))
+    conn.commit()
+
+    # Accounts hand-types this onto the real file once they've paid it.
+    conn.execute(
+        "UPDATE contracts SET full_commission_paid_date = '2026-07-01' WHERE po_no = 80060"
+    )
+    conn.commit()
+
+    # A later Master report re-upload for the same PO - a fresh Kenjin
+    # export that never carried Accounts' hand-typed edit in the first
+    # place - must not wipe that commission-paid-date back to blank.
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 80060, "Customer ID": "CUSTG12", "Customer Name": "Customer G12", "Agency Code": "AC001",
+    }])
+    import_master_report(conn, str(xlsx2))
+    conn.commit()
+
+    row = conn.execute("SELECT full_commission_paid_date FROM contracts WHERE po_no = 80060").fetchone()
+    assert row["full_commission_paid_date"] == "2026-07-01"
+    conn.close()
+
+
 def test_an_implausibly_wide_po_gap_is_flagged_not_auto_filled(tmp_path):
     """
     A gap in the tens of thousands is far more likely to be a typo in
