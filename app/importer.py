@@ -520,9 +520,21 @@ def _upsert_contract(conn, fields, now_iso):
             case_type = excluded.case_type,
             inurnment_date = excluded.inurnment_date,
             status = excluded.status,
-            full_settlement_paid_date = excluded.full_settlement_paid_date,
-            first_installment_paid_date = excluded.first_installment_paid_date,
-            sixth_installment_paid_date = excluded.sixth_installment_paid_date,
+            -- COALESCE(excluded.x, contracts.x), not a blind overwrite:
+            -- the real Master report never actually carries these three
+            -- dates (confirmed against real data - every row's blank),
+            -- Accounts fills them in by hand or via an AOR upload
+            -- instead. A blind overwrite here would silently wipe a
+            -- paid-date an AOR upload already confirmed back to NULL
+            -- the next time that same PO appears in a re-uploaded
+            -- Master report - found via reproduction, not theoretical.
+            -- The commission itself is never double-counted either way
+            -- (see the *_commission_flagged columns in commission.py),
+            -- but the wiped date would still show blank on a report
+            -- generated afterwards even though it was truly paid.
+            full_settlement_paid_date = COALESCE(excluded.full_settlement_paid_date, contracts.full_settlement_paid_date),
+            first_installment_paid_date = COALESCE(excluded.first_installment_paid_date, contracts.first_installment_paid_date),
+            sixth_installment_paid_date = COALESCE(excluded.sixth_installment_paid_date, contracts.sixth_installment_paid_date),
             full_commission_paid_date = excluded.full_commission_paid_date,
             installment_1_commission_paid_date = excluded.installment_1_commission_paid_date,
             installment_6_commission_paid_date = excluded.installment_6_commission_paid_date,

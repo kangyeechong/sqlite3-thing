@@ -191,6 +191,50 @@ def test_a_real_po_arriving_later_overwrites_its_inferred_cancelled_placeholder(
     conn.close()
 
 
+def test_a_paid_date_confirmed_by_aor_survives_a_later_master_report_reupload(tmp_path):
+    """
+    Regression test: the real Master report never actually carries the
+    Full Settlement / First Instalment / Sixth Instalment Paid Date
+    columns (confirmed against real data - every row is blank there),
+    Accounts or an AOR upload fills them in later instead. A later
+    Master report re-upload for the same PO used to blindly overwrite
+    those three columns with whatever the new file had (blank, in
+    practice) - silently wiping a paid-date an AOR upload had already
+    confirmed back to NULL. Found via reproduction against real data,
+    not theoretical - this only ever fills a blank now, exactly like
+    the AOR importer already does.
+    """
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 80050, "Customer ID": "CUSTG11", "Customer Name": "Customer G11", "Agency Code": "AC001",
+    }])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx1))
+    conn.commit()
+
+    # An AOR upload (or Accounts, by hand) fills in the paid-date later.
+    conn.execute(
+        "UPDATE contracts SET first_installment_paid_date = '2026-06-03' WHERE po_no = 80050"
+    )
+    conn.commit()
+
+    # A later Master report re-upload for the same PO - e.g. a
+    # cumulative monthly export that includes every PO again, not just
+    # new ones - must not wipe that paid-date back to blank.
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 80050, "Customer ID": "CUSTG11", "Customer Name": "Customer G11", "Agency Code": "AC001",
+    }])
+    import_master_report(conn, str(xlsx2))
+    conn.commit()
+
+    row = conn.execute("SELECT first_installment_paid_date FROM contracts WHERE po_no = 80050").fetchone()
+    assert row["first_installment_paid_date"] == "2026-06-03"
+    conn.close()
+
+
 def test_an_implausibly_wide_po_gap_is_flagged_not_auto_filled(tmp_path):
     """
     A gap in the tens of thousands is far more likely to be a typo in
