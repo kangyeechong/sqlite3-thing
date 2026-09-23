@@ -56,6 +56,16 @@ class ReviewFlag:
 
 @dataclass
 class ImportResult:
+    # Scoped to PO Nos genuinely new to the ledger this upload, not
+    # every row literally in the file - the real Kenjin export is
+    # cumulative (an "August" export re-lists every PO back to
+    # whenever records began, not just August's new ones), and staff
+    # want each upload's results to read as just that cycle's own
+    # activity, not the same old months over and over. Every row in
+    # the file is still upserted into the ledger regardless (safe and
+    # idempotent, and it lets a genuine correction - e.g. a previously
+    # cancelled PO turning out to be real after all - still go through
+    # normally) - only what's counted and flagged here is scoped.
     contracts_seen: int = 0
     contracts_new: int = 0
     contracts_updated: int = 0
@@ -70,8 +80,8 @@ class ImportResult:
     # lowest and highest PO No seen in this upload - each one gets a
     # synthetic cancelled contract row (see _detect_cancelled_po_gaps)
     # so it's tracked instead of silently vanishing. Not counted in
-    # contracts_seen/contracts_new, since those describe what was
-    # literally in the uploaded file, not something inferred from it.
+    # contracts_seen/contracts_new, since those describe what was new
+    # in the uploaded file, not something inferred from it.
     cancelled_po_gaps_detected: int = 0
 
 
@@ -373,12 +383,25 @@ def _build_contract_fields(raw_row):
     }
 
 
-def _review_checks(conn, fields_list):
+def _review_checks(conn, fields_list, already_known_po_nos):
     """
     Scans the whole batch for anomalies before anything is written.
     Returns a list of ReviewFlag - informational only, nothing here
     blocks the import. See docs/data_model.md section 6b for the
     rationale behind each check.
+
+    already_known_po_nos: PO Nos the ledger already had real data for
+    before this upload (see import_master_report). Every check below
+    except status_changed is a pure per-row data-quality check with no
+    memory of history - re-running it on a PO the ledger already knows
+    about, whose data hasn't changed, would just re-flag the exact same
+    already-seen issue every time a cumulative export repeats an old
+    month, which is pure noise to a human skimming results. Those
+    checks are skipped for an already-known PO. status_changed is the
+    one exception: it's inherently comparative (only ever fires when
+    Remarks-derived status genuinely differs from what's on file), so
+    it's checked for every row regardless of scope - it naturally stays
+    silent for an unchanged already-known row on its own.
     """
     flags = []
     seen_po_nos = set()
@@ -389,54 +412,55 @@ def _review_checks(conn, fields_list):
     for fields in fields_list:
         po_no = fields["po_no"]
 
-        if po_no in seen_po_nos:
-            flags.append(ReviewFlag(po_no, "duplicate_po", "This PO No appears more than once in this upload."))
-        seen_po_nos.add(po_no)
+        if po_no not in already_known_po_nos:
+            if po_no in seen_po_nos:
+                flags.append(ReviewFlag(po_no, "duplicate_po", "This PO No appears more than once in this upload."))
+            seen_po_nos.add(po_no)
 
-        if fields["first_installment_paid_date"] and fields["sixth_installment_paid_date"]:
-            if fields["sixth_installment_paid_date"] < fields["first_installment_paid_date"]:
+            if fields["first_installment_paid_date"] and fields["sixth_installment_paid_date"]:
+                if fields["sixth_installment_paid_date"] < fields["first_installment_paid_date"]:
+                    flags.append(ReviewFlag(
+                        po_no, "dates_out_of_order",
+                        "Sixth Instalment Paid Date is earlier than First Instalment Paid Date.",
+                    ))
+
+            if fields["net_price"] is not None and fields["net_price"] <= 0:
+                flags.append(ReviewFlag(po_no, "non_positive_net_price", f"Net Price is {fields['net_price']}."))
+
+            if fields["agency_code"] and fields["agency_code"] not in known_agency_codes:
+                is_aw_code = fields["agency_code"] in rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT
                 flags.append(ReviewFlag(
-                    po_no, "dates_out_of_order",
-                    "Sixth Instalment Paid Date is earlier than First Instalment Paid Date.",
+                    po_no, "unknown_agency_code",
+                    f"Agency Code '{fields['agency_code']}' hasn't been seen before - check for a typo. "
+                    + (
+                        "Recognized as an AW Consultancy code, so it'll get the agency/agent split."
+                        if is_aw_code else
+                        "New agencies default to flat commission (no agency/agent split) unless "
+                        "added to rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT - if this is actually another "
+                        "AW Consultancy agent code, add it there before relying on this run's numbers."
+                    ),
+                ))
+                known_agency_codes.add(fields["agency_code"])  # don't re-flag within the same batch
+
+            if fields["status"] == "active" and not fields["agency_code"]:
+                flags.append(ReviewFlag(po_no, "blank_agency_code", "Agency Code is blank on an active PO."))
+
+            has_any_payment = any([
+                fields["full_settlement_paid_date"],
+                fields["first_installment_paid_date"],
+                fields["sixth_installment_paid_date"],
+            ])
+            if fields["status"] in ("cancelled", "withdrawn", "on_hold") and has_any_payment:
+                flags.append(ReviewFlag(
+                    po_no, "payment_on_inactive_po",
+                    f"Status is '{fields['status']}' but a paid date is present.",
                 ))
 
-        if fields["net_price"] is not None and fields["net_price"] <= 0:
-            flags.append(ReviewFlag(po_no, "non_positive_net_price", f"Net Price is {fields['net_price']}."))
-
-        if fields["agency_code"] and fields["agency_code"] not in known_agency_codes:
-            is_aw_code = fields["agency_code"] in rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT
-            flags.append(ReviewFlag(
-                po_no, "unknown_agency_code",
-                f"Agency Code '{fields['agency_code']}' hasn't been seen before - check for a typo. "
-                + (
-                    "Recognized as an AW Consultancy code, so it'll get the agency/agent split."
-                    if is_aw_code else
-                    "New agencies default to flat commission (no agency/agent split) unless "
-                    "added to rules.AGENCIES_WITH_AGENCY_AGENT_SPLIT - if this is actually another "
-                    "AW Consultancy agent code, add it there before relying on this run's numbers."
-                ),
-            ))
-            known_agency_codes.add(fields["agency_code"])  # don't re-flag within the same batch
-
-        if fields["status"] == "active" and not fields["agency_code"]:
-            flags.append(ReviewFlag(po_no, "blank_agency_code", "Agency Code is blank on an active PO."))
-
-        has_any_payment = any([
-            fields["full_settlement_paid_date"],
-            fields["first_installment_paid_date"],
-            fields["sixth_installment_paid_date"],
-        ])
-        if fields["status"] in ("cancelled", "withdrawn", "on_hold") and has_any_payment:
-            flags.append(ReviewFlag(
-                po_no, "payment_on_inactive_po",
-                f"Status is '{fields['status']}' but a paid date is present.",
-            ))
-
-        if fields["case_type"] == "at_need" and fields["inurnment_date"] is None:
-            flags.append(ReviewFlag(
-                po_no, "at_need_missing_inurnment_date",
-                "Remarks mention an At Need case but no inurnment date could be read from it.",
-            ))
+            if fields["case_type"] == "at_need" and fields["inurnment_date"] is None:
+                flags.append(ReviewFlag(
+                    po_no, "at_need_missing_inurnment_date",
+                    "Remarks mention an At Need case but no inurnment date could be read from it.",
+                ))
 
         existing = conn.execute(
             "SELECT status FROM contracts WHERE po_no = ?", (po_no,)
@@ -680,16 +704,43 @@ def import_master_report(conn, file_path, imported_by_user=None):
             continue
         all_fields.append(_build_contract_fields(raw_row))
 
-    result = ImportResult(contracts_seen=len(all_fields))
-    result.review_flags = skip_flags + _review_checks(conn, all_fields)
+    # Snapshotted before any upsert below runs, so this reflects what
+    # the ledger knew BEFORE this upload - see ImportResult's own
+    # comment for why this scoping exists. customer_id IS NOT NULL
+    # deliberately excludes our own synthetic cancelled-PO gap
+    # placeholders (see _detect_cancelled_po_gaps - a placeholder
+    # always has no customer, the same signal _upsert_contract's own
+    # customers-table guard relies on) - a real row finally arriving
+    # for one of those numbers is genuine news (the business un-
+    # cancelled it, or the gap-fill was wrong), not an already-known PO
+    # repeating itself, so it must still be reported as new/updated.
+    already_known_po_nos = {
+        row["po_no"] for row in conn.execute("SELECT po_no FROM contracts WHERE customer_id IS NOT NULL")
+    }
+    new_fields = [f for f in all_fields if f["po_no"] not in already_known_po_nos]
+
+    result = ImportResult(contracts_seen=len(new_fields))
+    result.review_flags = skip_flags + _review_checks(conn, all_fields, already_known_po_nos)
 
     for fields in all_fields:
+        # Always upserted, known-before-this-upload or not - see
+        # ImportResult's comment: this keeps every PO's data fresh and
+        # lets a real correction through, only the counts below (and
+        # review_flags above) are scoped to what's new.
         is_new = _upsert_contract(conn, fields, now_iso)
+        if fields["po_no"] in already_known_po_nos:
+            continue
         if is_new:
             result.contracts_new += 1
         else:
             result.contracts_updated += 1
 
+    # Deliberately scoped to every PO in the file, not just new_fields:
+    # an old month's gap that's already filled in is still correctly
+    # excluded by _detect_cancelled_po_gaps's own "already a real
+    # contract" check below, so re-scanning the whole file's range
+    # here doesn't re-flag or re-create anything - it's already
+    # naturally idempotent without needing its own new/known split.
     # Runs after every real row above is already in the database, so a
     # gap only ever means "genuinely missing from this upload" - never
     # a false positive against a PO this same upload was about to add.

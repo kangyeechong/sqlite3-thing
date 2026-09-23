@@ -200,20 +200,26 @@ def download_aor_annotated(upload_id):
         upload_row = conn.execute(
             "SELECT filename, file_bytes FROM aor_uploads WHERE id = ?", (upload_id,)
         ).fetchone()
+
+        if upload_row is None:
+            abort(404, description=f"No AOR upload with id {upload_id}.")
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            safe_name = secure_filename(upload_row["filename"]) or "aor.xlsx"
+            saved_path = os.path.join(tmp_dir, safe_name)
+            with open(saved_path, "wb") as f:
+                f.write(upload_row["file_bytes"])
+
+            buffer = io.BytesIO()
+            # Scoped to this upload's own receipts (see
+            # annotate_aor_file's conn/aor_upload_id params) - a
+            # cumulative re-export re-lists earlier months' receipts
+            # too, and staff process month by month, so the Filtered
+            # sheet shouldn't show an old month's rows as if newly
+            # relevant again.
+            annotate_aor_file(saved_path, buffer, conn=conn, aor_upload_id=upload_id)
     finally:
         conn.close()
-
-    if upload_row is None:
-        abort(404, description=f"No AOR upload with id {upload_id}.")
-
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        safe_name = secure_filename(upload_row["filename"]) or "aor.xlsx"
-        saved_path = os.path.join(tmp_dir, safe_name)
-        with open(saved_path, "wb") as f:
-            f.write(upload_row["file_bytes"])
-
-        buffer = io.BytesIO()
-        annotate_aor_file(saved_path, buffer)
 
     buffer.seek(0)
     return send_file(

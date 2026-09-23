@@ -91,7 +91,33 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None):
         init_db(db_path)
 
     with _connect(db_path) as conn:
-        import_result = import_aor_report(conn, file_path, imported_by_user=created_by_user)
+        # Inserted before import_aor_report runs (commission_run_id
+        # filled in below, once it's known) rather than after, so its
+        # id exists in time to be stamped onto every aor_receipts row
+        # this call writes (see import_aor_report's aor_upload_id
+        # param) - that stamp is what lets annotate_aor_file later
+        # scope the "Filtered" sheet to just this upload's own newly-
+        # introduced receipts, not everything the file happens to
+        # repeat from an earlier month (the real Kenjin export is
+        # cumulative). Kept regardless of whether anything ends up
+        # newly due so the "download annotated copy" route can
+        # regenerate the colored version at any later time (see
+        # app/aor.py's annotate_aor_file) - not the annotated bytes
+        # themselves, since those are cheap to regenerate and this way
+        # a future change to the coloring rules applies retroactively
+        # to every past upload's download too.
+        with open(file_path, "rb") as f:
+            file_bytes = f.read()
+        upload_cursor = conn.execute(
+            "INSERT INTO aor_uploads (commission_run_id, filename, file_bytes, uploaded_at) "
+            "VALUES (?, ?, ?, ?)",
+            (None, os.path.basename(file_path), file_bytes, datetime.datetime.now().isoformat()),
+        )
+        aor_upload_id = upload_cursor.lastrowid
+
+        import_result = import_aor_report(
+            conn, file_path, imported_by_user=created_by_user, aor_upload_id=aor_upload_id,
+        )
 
         run_id, raised_events = process_commission_run(
             conn,
@@ -101,24 +127,14 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None):
             created_by_user=created_by_user,
         )
 
-        # Kept so the "download annotated copy" route can regenerate
-        # the colored version fresh from the original upload at any
-        # later time (see app/aor.py's annotate_aor_file) - not the
-        # annotated bytes themselves, since those are cheap to
-        # regenerate and this way a future change to the coloring
-        # rules applies retroactively to every past upload's download
-        # too. Keyed by its own id rather than run_id, since run_id is
-        # None whenever nothing was newly detected this upload (see
-        # process_commission_run) but the file is always worth
-        # annotating regardless.
-        with open(file_path, "rb") as f:
-            file_bytes = f.read()
-        upload_cursor = conn.execute(
-            "INSERT INTO aor_uploads (commission_run_id, filename, file_bytes, uploaded_at) "
-            "VALUES (?, ?, ?, ?)",
-            (run_id, os.path.basename(file_path), file_bytes, datetime.datetime.now().isoformat()),
-        )
-        aor_upload_id = upload_cursor.lastrowid
+        # commission_run_id is None whenever nothing was newly detected
+        # this upload (see process_commission_run) - left as the NULL
+        # it was inserted with above rather than updated, in that case.
+        if run_id is not None:
+            conn.execute(
+                "UPDATE aor_uploads SET commission_run_id = ? WHERE id = ?",
+                (run_id, aor_upload_id),
+            )
 
         conn.commit()
 

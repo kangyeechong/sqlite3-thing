@@ -191,6 +191,94 @@ def test_a_real_po_arriving_later_overwrites_its_inferred_cancelled_placeholder(
     conn.close()
 
 
+def test_a_cumulative_reupload_only_reports_the_genuinely_new_pos(tmp_path):
+    """
+    Staff process month by month, but the real Kenjin export is
+    cumulative (an "August" export re-lists every PO back to whenever
+    records began, not just August's new ones) - confirmed against a
+    real August export that re-included all of June's rows. Re-
+    uploading that file must only report the genuinely new POs in
+    contracts_seen/contracts_new (and not re-run the per-row review
+    checks against June's already-known, unchanged rows), even though
+    every row - June's included - is still safely upserted underneath.
+    """
+    xlsx_june = tmp_path / "june.xlsx"
+    june_rows = [
+        {"No": 1, "PO No": 80060, "Customer ID": "CUSTM1", "Customer Name": "Customer M1", "Agency Code": "AC001"},
+        {"No": 2, "PO No": 80061, "Customer ID": "CUSTM2", "Customer Name": "Customer M2", "Agency Code": "AC001"},
+    ]
+    build_master_report(xlsx_june, june_rows)
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    result_june = import_master_report(conn, str(xlsx_june))
+    conn.commit()
+    assert result_june.contracts_seen == 2
+    assert result_june.contracts_new == 2
+
+    # August's export is cumulative - it repeats June's two rows
+    # unchanged AND adds one genuinely new PO of its own.
+    xlsx_august = tmp_path / "august.xlsx"
+    august_rows = june_rows + [
+        {"No": 3, "PO No": 80062, "Customer ID": "CUSTM3", "Customer Name": "Customer M3", "Agency Code": "AC001"},
+    ]
+    build_master_report(xlsx_august, august_rows)
+    result_august = import_master_report(conn, str(xlsx_august))
+    conn.commit()
+
+    assert result_august.contracts_seen == 1  # only PO 80062
+    assert result_august.contracts_new == 1
+    assert result_august.contracts_updated == 0
+    assert result_august.review_flags == []  # June's rows not re-checked
+
+    # All three POs still genuinely exist in the ledger - nothing about
+    # this scoping skipped writing June's data, only reporting it.
+    count = conn.execute("SELECT COUNT(*) AS n FROM contracts").fetchone()["n"]
+    assert count == 3
+    conn.close()
+
+
+def test_a_previously_inferred_cancelled_po_turning_real_is_still_reported(tmp_path):
+    """
+    A synthetic cancelled-PO placeholder (see _detect_cancelled_po_gaps)
+    is already "known" to the ledger by PO No, but has no real data -
+    it must NOT be treated as an already-known PO for reporting
+    purposes once real data for it finally arrives (the business un-
+    cancelled it, or the gap-fill was wrong): that's genuine news for a
+    human to see, not an old month's PO repeating itself.
+    """
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [
+        {"No": 1, "PO No": 80070, "Customer ID": "CUSTM4", "Customer Name": "Customer M4", "Agency Code": "AC001"},
+        # 80071 missing here - auto-filled as a cancelled placeholder
+        {"No": 2, "PO No": 80072, "Customer ID": "CUSTM5", "Customer Name": "Customer M5", "Agency Code": "AC001"},
+    ])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx1))
+    conn.commit()
+    assert conn.execute("SELECT status FROM contracts WHERE po_no = 80071").fetchone()["status"] == "cancelled"
+
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 80071, "Customer ID": "CUSTM6", "Customer Name": "Customer M6",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    result2 = import_master_report(conn, str(xlsx2))
+    conn.commit()
+
+    # An UPDATE, not an INSERT - the placeholder row already existed -
+    # but still counted and reported, not silently absorbed into
+    # "already known": a real customer arriving for a PO that used to
+    # be a no-customer placeholder is exactly the kind of change this
+    # scoping exists to surface.
+    assert result2.contracts_seen == 1
+    assert result2.contracts_new == 0
+    assert result2.contracts_updated == 1
+    conn.close()
+
+
 def test_a_paid_date_confirmed_by_aor_survives_a_later_master_report_reupload(tmp_path):
     """
     Regression test: the real Master report never actually carries the

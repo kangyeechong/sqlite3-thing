@@ -198,13 +198,21 @@ CREATE TABLE IF NOT EXISTS historical_summary_rows (
 -- po_no is nullable: a receipt whose PO doesn't exist in the ledger
 -- yet is still recorded as seen (so it's never silently reprocessed
 -- once the PO does show up) but has nothing to attach a paid-date to.
+-- aor_upload_id is nullable too (and NULL for every row written before
+-- this column existed): it's what lets annotate_aor_file scope its
+-- "Filtered" sheet to only the receipts THIS SPECIFIC upload actually
+-- introduced, so a later cumulative export that repeats earlier
+-- months' receipts doesn't show them as if newly relevant again - see
+-- the migration and app/aor.py's annotate_aor_file for the full
+-- reasoning.
 CREATE TABLE IF NOT EXISTS aor_receipts (
     id                         INTEGER PRIMARY KEY AUTOINCREMENT,
     acknowledgment_receipt_no  TEXT NOT NULL UNIQUE,
     po_no                      INTEGER,
     imported_at                TEXT NOT NULL,
     imported_by_user           TEXT,
-    source_filename            TEXT
+    source_filename            TEXT,
+    aor_upload_id              INTEGER REFERENCES aor_uploads(id)
 );
 
 -- The raw bytes of an uploaded AOR export, kept only so its

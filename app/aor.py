@@ -179,7 +179,7 @@ def _targets_for_classification(kind, numbers):
     return set()
 
 
-def import_aor_report(conn, file_path, imported_by_user=None):
+def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None):
     """
     Reads every AOR-shaped sheet in the workbook (a real export often
     has several overlapping ones - see the module docstring), fills in
@@ -192,6 +192,16 @@ def import_aor_report(conn, file_path, imported_by_user=None):
     (whether it came from a Master report upload or an earlier AOR
     one) - this only ever fills in a blank, exactly like Accounts
     manually cross-checking this file and typing the date in once.
+
+    aor_upload_id: the aor_uploads row this call is processing on
+    behalf of (see app.pipeline.process_aor_upload), stamped onto
+    every aor_receipts row this call writes. Optional - None for a
+    caller that has no aor_uploads row yet (e.g. a script or test
+    calling this directly) - it's only used later to scope
+    annotate_aor_file's "Filtered" sheet to one specific upload's own
+    newly-introduced receipts, never for the transfer logic above,
+    which is already correctly scoped via aor_receipts' own
+    UNIQUE(acknowledgment_receipt_no).
 
     Deliberately does not commit the transaction, matching
     import_master_report - the caller decides when to commit.
@@ -270,9 +280,10 @@ def import_aor_report(conn, file_path, imported_by_user=None):
     # same receipt on every future overlapping upload adds nothing.
     for ack_no in seen_this_upload:
         conn.execute(
-            "INSERT INTO aor_receipts (acknowledgment_receipt_no, imported_at, imported_by_user, source_filename) "
-            "VALUES (?, ?, ?, ?)",
-            (ack_no, now_iso, imported_by_user, source_filename),
+            "INSERT INTO aor_receipts "
+            "(acknowledgment_receipt_no, imported_at, imported_by_user, source_filename, aor_upload_id) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (ack_no, now_iso, imported_by_user, source_filename, aor_upload_id),
         )
     result.receipts_imported = len(seen_this_upload)
 
@@ -295,7 +306,7 @@ def import_aor_report(conn, file_path, imported_by_user=None):
     return result
 
 
-def annotate_aor_file(file_path, output):
+def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
     """
     Writes a copy of the AOR export to `output` (a path or a file-like
     object) with every original sheet left exactly as uploaded, plus
@@ -320,13 +331,44 @@ def annotate_aor_file(file_path, output):
     in the original file is never silently flattened to its cached
     value just because this function also had to read it.
 
-    No ledger lookups, no side effects, and independent of
-    import_aor_report (this only reflects what's IN the file, not what
-    got applied to the database, so it's safe to generate even for
-    receipts already seen on an earlier upload).
+    conn/aor_upload_id: optional - when both are given, the Filtered
+    sheet is scoped to only the receipts THIS SPECIFIC upload actually
+    introduced (via aor_receipts.aor_upload_id, stamped at import time
+    - see import_aor_report). Staff process month by month, but the
+    real Kenjin export is cumulative (an "August" export re-lists every
+    receipt back to whenever records began), so without this, an old
+    month's receipts would show up as if newly relevant every time a
+    later cumulative export gets annotated. Left as None (the default)
+    this stays exactly what it always was: no ledger lookups, no side
+    effects, purely a reflection of what's IN the file - which is
+    still exactly right for the very first time a given upload's own
+    bytes get annotated, since every receipt it just imported is, by
+    definition, stamped with its own aor_upload_id.
     """
     values_workbook = openpyxl.load_workbook(file_path, data_only=True)
     aor_sheets = [sheet for sheet in values_workbook.worksheets if _is_aor_shaped(sheet)]
+
+    this_upload_receipts = None
+    if conn is not None and aor_upload_id is not None:
+        this_upload_receipts = {
+            row["acknowledgment_receipt_no"] for row in conn.execute(
+                "SELECT acknowledgment_receipt_no FROM aor_receipts WHERE aor_upload_id = ?",
+                (aor_upload_id,),
+            )
+        }
+        if not this_upload_receipts:
+            # Every receipt aor_upload_id was stamped on predates this
+            # column (added in a later migration - existing aor_uploads
+            # rows have no receipts linked to them at all, not zero on
+            # purpose) - falling back to unscoped rather than filtering
+            # to an empty set avoids turning an old upload's "download
+            # annotated copy" link into a blank Filtered sheet the
+            # moment this feature ships. A genuine upload that really
+            # did import zero receipts is a vanishing edge case next to
+            # that regression - and produces an equally empty Filtered
+            # sheet either way, since there'd be nothing left to show
+            # unscoped either.
+            this_upload_receipts = None
 
     # First pass: which POs have a full-payment completion anywhere in
     # this file, so every receipt row for that PO (not just the
@@ -354,6 +396,9 @@ def annotate_aor_file(file_path, output):
         if headers is None:
             headers = sheet_headers
         for raw_row in _read_aor_rows(sheet):
+            if this_upload_receipts is not None:
+                if raw_row.get("Acknowledgment Receipt No") not in this_upload_receipts:
+                    continue
             po_no = raw_row.get("PO No")
             kind, numbers = _classify_reference(raw_row.get("Reference No"))
             targets = _targets_for_classification(kind, numbers)

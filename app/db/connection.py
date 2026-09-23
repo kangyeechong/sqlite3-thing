@@ -73,6 +73,8 @@ _MIGRATIONS = [
      "ALTER TABLE commission_events ADD COLUMN confirmed_at TEXT", None),
     ("commission_events", "confirmed_by_user",
      "ALTER TABLE commission_events ADD COLUMN confirmed_by_user TEXT", None),
+    ("aor_receipts", "aor_upload_id",
+     "ALTER TABLE aor_receipts ADD COLUMN aor_upload_id INTEGER REFERENCES aor_uploads(id)", None),
 ]
 
 # For a brand-new table (not a new column on an existing one) - same
