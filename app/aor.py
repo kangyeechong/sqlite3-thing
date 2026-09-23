@@ -525,11 +525,33 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
     uploaded files - a receipt's classification was already decided at
     import time (see import_aor_report), so this never re-parses or
     re-judges anything, just reports back what's already on record.
+
+    Customer ID/Name/Lot No/Agency Code/Agent Name are pulled from the
+    ledger (via po_no), not from the AOR row itself - the real AOR
+    export's own Customer Name column is routinely blank (confirmed
+    against a real sample), while the ledger's copy is reliable since
+    it came from the Master report. A receipt with no po_no at all (no
+    valid PO No on that row - see import_aor_report), or a po_no not
+    yet in the ledger, simply shows blank for all of these rather than
+    failing.
+
+    Colored the same way annotate_aor_file's "Filtered" sheet already
+    is (yellow for installment 1/6, green for a full payment) - same
+    precedence too (yellow wins if a receipt's own trigger_type somehow
+    carries both) - so this reads consistently with what staff already
+    know from that sheet. A non-triggering or unmatched row (no
+    trigger_type - only ever appears on "All Receipts") is left
+    uncolored.
     """
     header_font = Font(bold=True)
     columns = (
         ("Acknowledgment Receipt No", "acknowledgment_receipt_no"),
         ("PO No", "po_no"),
+        ("Customer ID", "customer_id"),
+        ("Customer Name", "customer_name"),
+        ("Lot No", "lot_no"),
+        ("Agency Code", "agency_code"),
+        ("Agent Name", "agent_name"),
         ("Receipt Date", "receipt_date"),
         ("Reference No", "reference_text"),
         ("Payment Received (RM)", "payment_received"),
@@ -539,11 +561,14 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
 
     all_receipts = conn.execute(
         """
-        SELECT acknowledgment_receipt_no, po_no, receipt_date, reference_text,
-               payment_received, trigger_type, source_filename
-        FROM aor_receipts
-        WHERE receipt_date BETWEEN ? AND ?
-        ORDER BY receipt_date, acknowledgment_receipt_no
+        SELECT r.acknowledgment_receipt_no, r.po_no, r.receipt_date, r.reference_text,
+               r.payment_received, r.trigger_type, r.source_filename,
+               c.customer_id, cu.name AS customer_name, c.lot_no, c.agency_code, c.agent_name
+        FROM aor_receipts r
+        LEFT JOIN contracts c ON c.po_no = r.po_no
+        LEFT JOIN customers cu ON cu.customer_id = c.customer_id
+        WHERE r.receipt_date BETWEEN ? AND ?
+        ORDER BY r.receipt_date, r.acknowledgment_receipt_no
         """,
         (period_start, period_end),
     ).fetchall()
@@ -551,15 +576,28 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
 
     workbook = openpyxl.Workbook()
 
+    def _fill_for(trigger_type):
+        if not trigger_type:
+            return None
+        targets = trigger_type.split(",")
+        if "installment_1" in targets or "installment_6" in targets:
+            return _YELLOW_FILL
+        if "full_payment" in targets:
+            return _GREEN_FILL
+        return None
+
     def _write_sheet(sheet, title_rows):
         for col, (label, _) in enumerate(columns, start=1):
             cell = sheet.cell(row=1, column=col, value=label)
             cell.font = header_font
         for row_offset, row in enumerate(title_rows, start=2):
+            fill = _fill_for(row["trigger_type"])
             for col, (_, key) in enumerate(columns, start=1):
-                sheet.cell(row=row_offset, column=col, value=row[key])
+                cell = sheet.cell(row=row_offset, column=col, value=row[key])
+                if fill is not None:
+                    cell.fill = fill
         for col in range(1, len(columns) + 1):
-            sheet.column_dimensions[get_column_letter(col)].width = 24
+            sheet.column_dimensions[get_column_letter(col)].width = 20
 
     all_sheet = workbook.active
     all_sheet.title = "All Receipts"

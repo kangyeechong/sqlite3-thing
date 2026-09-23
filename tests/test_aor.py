@@ -742,16 +742,19 @@ def test_annotate_aor_file_sorts_by_po_no_ascending(tmp_path):
     assert po_nos == [20260299, 20260299, 20260300]
 
 
-def _sheet_rows(workbook, sheet_name, headers=("Acknowledgment Receipt No", "PO No", "Receipt Date",
-                                                 "Reference No", "Payment Received (RM)", "Trigger Type",
-                                                 "Source File")):
+def _sheet_rows(workbook, sheet_name, headers=("Acknowledgment Receipt No", "PO No", "Customer ID",
+                                                 "Customer Name", "Lot No", "Agency Code", "Agent Name",
+                                                 "Receipt Date", "Reference No", "Payment Received (RM)",
+                                                 "Trigger Type", "Source File")):
     sheet = workbook[sheet_name]
     rows = []
     for row_num in range(2, sheet.max_row + 1):
         values = [sheet.cell(row=row_num, column=col).value for col in range(1, len(headers) + 1)]
         if all(v is None for v in values):
             continue
-        rows.append(dict(zip(headers, values)))
+        row = dict(zip(headers, values))
+        row["_fill"] = sheet.cell(row=row_num, column=1).fill
+        rows.append(row)
     return rows
 
 
@@ -773,9 +776,12 @@ def test_period_audit_workbook_combines_multiple_uploads_covering_the_same_perio
 
     xlsx_file1 = tmp_path / "file1.xlsx"
     build_aor_report(xlsx_file1, [{
+        # Customer Name left blank on purpose - matches the real AOR
+        # export, which routinely leaves it blank (see the docstring's
+        # reasoning for pulling identity from the ledger instead).
         "No": 1, "Acknowledgment Receipt No": "RC-AUDIT-1",
         "Acknowledgment Receipt Date": datetime.date(2026, 8, 5),
-        "PO No": 80080, "Customer ID": "CUSTP1", "Customer Name": "Customer P1",
+        "PO No": 80080, "Customer ID": "CUSTP1", "Customer Name": None,
         "Reference No": "TRF (INST 01/24)", "Payment Received (RM)": 750,
     }])
     process_aor_upload(db_path, str(xlsx_file1), run_date=datetime.date(2026, 8, 17),
@@ -785,7 +791,7 @@ def test_period_audit_workbook_combines_multiple_uploads_covering_the_same_perio
     build_aor_report(xlsx_file2, [{
         "No": 1, "Acknowledgment Receipt No": "RC-AUDIT-2",
         "Acknowledgment Receipt Date": datetime.date(2026, 8, 25),
-        "PO No": 80081, "Customer ID": "CUSTP2", "Customer Name": "Customer P2",
+        "PO No": 80081, "Customer ID": "CUSTP2", "Customer Name": None,
         "Reference No": "TRF (INST 06/24)", "Payment Received (RM)": 900,
     }])
     process_aor_upload(db_path, str(xlsx_file2), run_date=datetime.date(2026, 8, 31),
@@ -801,6 +807,16 @@ def test_period_audit_workbook_combines_multiple_uploads_covering_the_same_perio
     assert {r["Acknowledgment Receipt No"] for r in all_rows} == {"RC-AUDIT-1", "RC-AUDIT-2"}
     valid_rows = _sheet_rows(workbook, "Valid Payments")
     assert {r["Acknowledgment Receipt No"] for r in valid_rows} == {"RC-AUDIT-1", "RC-AUDIT-2"}
+
+    by_ack_no = {r["Acknowledgment Receipt No"]: r for r in valid_rows}
+    # Pulled from the ledger (Customer P1/P2, as the Master report set
+    # it), not from the AOR row's own blank Customer Name.
+    assert by_ack_no["RC-AUDIT-1"]["Customer Name"] == "Customer P1"
+    assert by_ack_no["RC-AUDIT-2"]["Customer Name"] == "Customer P2"
+    # installment_1 -> yellow, installment_6 -> yellow (same scheme as
+    # annotate_aor_file's Filtered sheet).
+    assert by_ack_no["RC-AUDIT-1"]["_fill"].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
+    assert by_ack_no["RC-AUDIT-2"]["_fill"].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
 
 
 def test_period_audit_workbook_separates_non_triggering_and_unmatched_receipts(tmp_path):
