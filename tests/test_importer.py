@@ -392,3 +392,58 @@ def test_an_implausibly_wide_po_gap_is_flagged_not_auto_filled(tmp_path):
     count = conn.execute("SELECT COUNT(*) AS n FROM contracts").fetchone()["n"]
     assert count == 2
     conn.close()
+
+
+def test_new_po_date_range_covers_only_the_genuinely_new_rows(tmp_path):
+    """
+    Powers the results page's one-click link straight to that month's
+    Overall Commission report (see app.report.generate_period_report) -
+    computed from the genuinely-new rows only (same scoping as
+    contracts_seen/contracts_new), not the whole file, so a cumulative
+    re-upload doesn't drag an old month's dates into this upload's
+    suggested range.
+    """
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [
+        {"No": 1, "PO No": 80080, "Customer ID": "CUSTN1", "Customer Name": "Customer N1",
+         "PO Date": datetime.date(2026, 6, 5), "Agency Code": "AC001"},
+    ])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    result1 = import_master_report(conn, str(xlsx1))
+    conn.commit()
+    assert result1.new_po_date_min == "2026-06-05"
+    assert result1.new_po_date_max == "2026-06-05"
+
+    # A cumulative August upload that repeats June's row and adds two
+    # genuinely new August ones - the range must reflect only August.
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [
+        {"No": 1, "PO No": 80080, "Customer ID": "CUSTN1", "Customer Name": "Customer N1",
+         "PO Date": datetime.date(2026, 6, 5), "Agency Code": "AC001"},
+        {"No": 2, "PO No": 80081, "Customer ID": "CUSTN2", "Customer Name": "Customer N2",
+         "PO Date": datetime.date(2026, 8, 3), "Agency Code": "AC001"},
+        {"No": 3, "PO No": 80082, "Customer ID": "CUSTN3", "Customer Name": "Customer N3",
+         "PO Date": datetime.date(2026, 8, 20), "Agency Code": "AC001"},
+    ])
+    result2 = import_master_report(conn, str(xlsx2))
+    conn.commit()
+    assert result2.new_po_date_min == "2026-08-03"
+    assert result2.new_po_date_max == "2026-08-20"
+    conn.close()
+
+
+def test_new_po_date_range_is_none_when_nothing_has_a_po_date(tmp_path):
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 80083, "Customer ID": "CUSTN4", "Customer Name": "Customer N4", "Agency Code": "AC001"},
+    ])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    result = import_master_report(conn, str(xlsx_path))
+    conn.commit()
+    conn.close()
+    assert result.new_po_date_min is None
+    assert result.new_po_date_max is None

@@ -83,6 +83,17 @@ class ImportResult:
     # contracts_seen/contracts_new, since those describe what was new
     # in the uploaded file, not something inferred from it.
     cancelled_po_gaps_detected: int = 0
+    # The PO Date range spanned by this upload's genuinely-new rows
+    # (ISO date strings), or None if none of them have a PO Date on
+    # file at all. Lets the results page offer a one-click link straight
+    # to this month's Overall Commission report (see
+    # app.report.generate_period_report) without staff having to type
+    # dates themselves - the AOR upload still needs a manual period
+    # picker (its export is fragmented across arbitrary windows that
+    # don't line up with calendar months), but a Master report upload's
+    # own new rows always share one real, known purchase-date range.
+    new_po_date_min: object = None
+    new_po_date_max: object = None
 
 
 def _find_header_row(sheet):
@@ -721,6 +732,11 @@ def import_master_report(conn, file_path, imported_by_user=None):
 
     result = ImportResult(contracts_seen=len(new_fields))
     result.review_flags = skip_flags + _review_checks(conn, all_fields, already_known_po_nos)
+
+    new_po_dates = sorted(f["po_date"] for f in new_fields if f["po_date"])
+    if new_po_dates:
+        result.new_po_date_min = new_po_dates[0]
+        result.new_po_date_max = new_po_dates[-1]
 
     for fields in all_fields:
         # Always upserted, known-before-this-upload or not - see

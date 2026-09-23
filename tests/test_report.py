@@ -1450,52 +1450,86 @@ def test_generate_report_raises_clear_error_when_nothing_was_due(tmp_path):
         generate_report(db_path, result["commission_run_id"], str(tmp_path / "report.xlsx"))
 
 
-def test_period_report_shows_only_the_in_period_trigger_not_full_history(tmp_path):
+def test_period_report_excludes_a_po_purchased_confirmed_late_in_a_different_month(tmp_path):
     """
-    The core month-leaking-into-month problem: a PO with installment 1
-    confirmed in June AND installment 6 confirmed in August must show
-    up in August's period report with ONLY its August activity - not
-    its June installment 1 figure too, even though the standing
-    per-run report would show both on the same row forever.
+    Confirmed with the business: "August's report" means POs PURCHASED
+    in August, full stop - not POs with something confirmed in August.
+    A June-purchased PO whose installment doesn't get confirmed until
+    August must stay OFF August's report and stay ON June's (which can
+    be re-downloaded any time to pick up the late confirmation) - the
+    exact opposite of trigger-date scoping.
     """
     db_path = _db_path(tmp_path)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(xlsx_path, [{
         "No": 1, "PO No": 60020, "Customer ID": "CUST220", "Customer Name": "Customer 220",
-        "Niche/Tablet Price (RM)": 10000,  # 7.5% = 750.00 per installment
-        "First Instalment Paid Date": datetime.date(2026, 6, 15),
-        "Sixth Instalment Paid Date": datetime.date(2026, 8, 10),
+        "PO Date": datetime.date(2026, 6, 10),
+        "Niche/Tablet Price (RM)": 10000,  # 7.5% = 750.00
+        "First Instalment Paid Date": datetime.date(2026, 8, 10),  # paid late, in August
         "Agency Code": "AC001",
     }])
     result = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 8, 17))
     confirm_all_pending(db_path, result["commission_run_id"])
+
+    august_report = tmp_path / "august_report.xlsx"
+    with pytest.raises(ValueError):  # nothing PURCHASED in August at all
+        generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(august_report))
+
+    june_report = tmp_path / "june_report.xlsx"
+    generate_period_report_file(db_path, "2026-06-01", "2026-06-30", str(june_report))
+    workbook = openpyxl.load_workbook(june_report)
+    _headers, data_rows = _find_table_rows(workbook["All"])
+    assert len(data_rows) == 1
+    row = data_rows[0]
+    assert row["PO No"] == 60020
+    # The late-confirmed August payment still shows, on June's report -
+    # "whatever's confirmed so far for June's own contracts".
+    assert row["1st Half Commission (RM)"] == 750.0
+
+
+def test_period_report_includes_a_po_even_with_nothing_confirmed_yet(tmp_path):
+    """
+    The row-set is "every PO purchased in this period", not "every PO
+    with something confirmed" - matches the standing report's own
+    "nothing hidden" philosophy, just pre-filtered by purchase month. A
+    fresh August PO with no payment yet still shows up, blank.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60021, "Customer ID": "CUST221", "Customer Name": "Customer 221",
+        "PO Date": datetime.date(2026, 8, 5),
+        "Niche/Tablet Price (RM)": 10000,
+        "Agency Code": "AC001",
+        # nothing paid yet
+    }])
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 8, 17))
 
     report_path = tmp_path / "august_report.xlsx"
     generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(report_path))
 
     workbook = openpyxl.load_workbook(report_path)
     _headers, data_rows = _find_table_rows(workbook["All"])
-    assert len(data_rows) == 1
-    row = data_rows[0]
-    assert row["PO No"] == 60020
-    assert row["Balance Half Commission (RM)"] == 750.0   # August's own trigger
-    assert row["1st Half Commission (RM)"] is None         # June's - not this period's business
+    assert {row["PO No"] for row in data_rows} == {60021}
+    assert data_rows[0]["Full Payment Commission (RM)"] is None
 
 
-def test_period_report_excludes_a_po_with_nothing_confirmed_in_the_period(tmp_path):
-    """A PO whose only confirmed activity is outside the chosen range
-    doesn't appear at all - this is not the standing full ledger."""
+def test_period_report_excludes_a_po_purchased_outside_the_period(tmp_path):
+    """A PO purchased outside the chosen range doesn't appear at all,
+    regardless of its own confirmed commission status."""
     db_path = _db_path(tmp_path)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(xlsx_path, [
         {
-            "No": 1, "PO No": 60021, "Customer ID": "CUST221", "Customer Name": "Customer 221",
+            "No": 1, "PO No": 60022, "Customer ID": "CUST222", "Customer Name": "Customer 222",
+            "PO Date": datetime.date(2026, 6, 20),
             "Niche/Tablet Price (RM)": 10000,
             "Full Settlement Paid Date": datetime.date(2026, 6, 20),
             "Agency Code": "AC001",
         },
         {
-            "No": 2, "PO No": 60022, "Customer ID": "CUST222", "Customer Name": "Customer 222",
+            "No": 2, "PO No": 60023, "Customer ID": "CUST223", "Customer Name": "Customer 223",
+            "PO Date": datetime.date(2026, 8, 5),
             "Niche/Tablet Price (RM)": 10000,
             "Full Settlement Paid Date": datetime.date(2026, 8, 5),
             "Agency Code": "AC001",
@@ -1509,24 +1543,26 @@ def test_period_report_excludes_a_po_with_nothing_confirmed_in_the_period(tmp_pa
 
     workbook = openpyxl.load_workbook(report_path)
     _headers, data_rows = _find_table_rows(workbook["All"])
-    assert {row["PO No"] for row in data_rows} == {60022}  # not the June one
+    assert {row["PO No"] for row in data_rows} == {60023}  # not the June one
 
 
-def test_period_report_grand_total_is_scoped_not_all_time(tmp_path):
+def test_period_report_grand_total_is_scoped_by_po_date(tmp_path):
     """The Running Total / grand total on a period report reflects
-    only that period's own confirmed commission, not the full
+    only in-period-purchased POs' confirmed commission, not the full
     lifetime total the standing per-run report would show."""
     db_path = _db_path(tmp_path)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(xlsx_path, [
         {
-            "No": 1, "PO No": 60023, "Customer ID": "CUST223", "Customer Name": "Customer 223",
+            "No": 1, "PO No": 60024, "Customer ID": "CUST224", "Customer Name": "Customer 224",
+            "PO Date": datetime.date(2026, 6, 20),
             "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
             "Full Settlement Paid Date": datetime.date(2026, 6, 20),
             "Agency Code": "AC001",
         },
         {
-            "No": 2, "PO No": 60024, "Customer ID": "CUST224", "Customer Name": "Customer 224",
+            "No": 2, "PO No": 60025, "Customer ID": "CUST225", "Customer Name": "Customer 225",
+            "PO Date": datetime.date(2026, 8, 5),
             "Niche/Tablet Price (RM)": 20000,  # 15% = 3000.00
             "Full Settlement Paid Date": datetime.date(2026, 8, 5),
             "Agency Code": "AC001",
@@ -1544,11 +1580,12 @@ def test_period_report_grand_total_is_scoped_not_all_time(tmp_path):
     assert grand_total_row[4] == 3000.0  # August's own PO only, not 1500 + 3000
 
 
-def test_period_report_raises_when_nothing_confirmed_in_range(tmp_path):
+def test_period_report_raises_when_no_po_purchased_in_range(tmp_path):
     db_path = _db_path(tmp_path)
     xlsx_path = tmp_path / "upload.xlsx"
     build_master_report(xlsx_path, [{
-        "No": 1, "PO No": 60025, "Customer ID": "CUST225", "Customer Name": "Customer 225",
+        "No": 1, "PO No": 60026, "Customer ID": "CUST226", "Customer Name": "Customer 226",
+        "PO Date": datetime.date(2026, 6, 20),
         "Niche/Tablet Price (RM)": 10000,
         "Full Settlement Paid Date": datetime.date(2026, 6, 20),
         "Agency Code": "AC001",
@@ -1560,17 +1597,17 @@ def test_period_report_raises_when_nothing_confirmed_in_range(tmp_path):
         generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(tmp_path / "report.xlsx"))
 
 
-def test_period_report_combines_events_confirmed_across_multiple_uploads(tmp_path):
+def test_period_report_combines_pos_across_multiple_uploads(tmp_path):
     """
-    Multiple separate uploads/runs, both contributing August activity,
+    Multiple separate uploads, both contributing August-purchased POs,
     must both show up in one August period report - it's not tied to
-    any single run, matching how staff process real data across
-    several overlapping AOR files for one period.
+    any single run/upload.
     """
     db_path = _db_path(tmp_path)
     xlsx1 = tmp_path / "upload1.xlsx"
     build_master_report(xlsx1, [{
-        "No": 1, "PO No": 60026, "Customer ID": "CUST226", "Customer Name": "Customer 226",
+        "No": 1, "PO No": 60027, "Customer ID": "CUST227", "Customer Name": "Customer 227",
+        "PO Date": datetime.date(2026, 8, 3),
         "Niche/Tablet Price (RM)": 10000,
         "Full Settlement Paid Date": datetime.date(2026, 8, 3),
         "Agency Code": "AC001",
@@ -1581,13 +1618,15 @@ def test_period_report_combines_events_confirmed_across_multiple_uploads(tmp_pat
     xlsx2 = tmp_path / "upload2.xlsx"
     build_master_report(xlsx2, [
         {
-            "No": 1, "PO No": 60026, "Customer ID": "CUST226", "Customer Name": "Customer 226",
+            "No": 1, "PO No": 60027, "Customer ID": "CUST227", "Customer Name": "Customer 227",
+            "PO Date": datetime.date(2026, 8, 3),
             "Niche/Tablet Price (RM)": 10000,
             "Full Settlement Paid Date": datetime.date(2026, 8, 3),
             "Agency Code": "AC001",
         },
         {
-            "No": 2, "PO No": 60027, "Customer ID": "CUST227", "Customer Name": "Customer 227",
+            "No": 2, "PO No": 60028, "Customer ID": "CUST228", "Customer Name": "Customer 228",
+            "PO Date": datetime.date(2026, 8, 20),
             "Niche/Tablet Price (RM)": 10000,
             "Full Settlement Paid Date": datetime.date(2026, 8, 20),
             "Agency Code": "AC001",
@@ -1601,4 +1640,4 @@ def test_period_report_combines_events_confirmed_across_multiple_uploads(tmp_pat
 
     workbook = openpyxl.load_workbook(report_path)
     _headers, data_rows = _find_table_rows(workbook["All"])
-    assert {row["PO No"] for row in data_rows} == {60026, 60027}
+    assert {row["PO No"] for row in data_rows} == {60027, 60028}

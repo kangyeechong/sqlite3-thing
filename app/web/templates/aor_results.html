@@ -16,10 +16,7 @@
      <span class="muted">&mdash; every receipt dated in this period across ALL your uploads so far (not just this one file), plus a second sheet with just the valid commission-triggering payments among them.</span></p>
 
   {% if raised_events %}
-    <p class="muted">Once you've reviewed &amp; confirmed the newly detected commission below, come back here (or go to Past Reports) to download the actual {{ period_start }} to {{ period_end }} Overall Commission report.</p>
-  {% else %}
-    <p><a class="button" href="{{ url_for('web.download_period', period_start=period_start, period_end=period_end) }}">Download {{ period_start }} to {{ period_end }} Overall Commission report</a>
-       <span class="muted">&mdash; the actual month-scoped report: every PO with a commission confirmed in this period, across all your uploads so far.</span></p>
+    <p class="muted">Once you've reviewed &amp; confirmed the commission below, go to Past Reports to download the Overall Commission report for whichever PO's purchase month(s) got confirmed just now - a receipt processed for this {{ period_start }}-{{ period_end }} payment window can belong to a PO purchased in an entirely different month, so there's no one period to auto-link to here.</p>
   {% endif %}
 
   <h2>Import review panel</h2>

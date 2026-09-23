@@ -207,74 +207,46 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
     Signature Date - see _cooling_off_status).
 
     period_start/period_end (both required together, or both left
-    None): switches to the scoped mode generate_period_report uses -
-    staff process month by month, but the real Kenjin export is never
-    cut on clean calendar boundaries, so "August's report" means every
-    commission event CONFIRMED with a trigger_date in that range,
-    regardless of which PO's purchase month it is or which upload
-    introduced it. Only contracts with at least one such event appear
-    at all (not the full standing ledger), and only the in-period
-    trigger(s) show a commission figure - an installment confirmed
-    outside the period is left blank here even if it's the same PO,
-    since this specific download is about this specific period's
-    activity. The pre-tool historical-absorption fallback (see the
-    unscoped branch below) is deliberately skipped in this mode: that
-    money has no clean per-day date to filter by.
+    None): switches to the scoped mode generate_period_report uses.
+    Confirmed with the business: "August's report" means every PO
+    PURCHASED in August (po_date in range) - a June-purchased PO whose
+    installment happens to get confirmed in August stays on JUNE's
+    report, not August's (re-download June's report any time to pick
+    up a late-confirmed payment for it - same "whatever's confirmed so
+    far" logic as the unscoped report, just pre-filtered to that
+    month's own contracts). Every commission event ever confirmed for
+    an in-period PO shows here, regardless of when it was confirmed -
+    this is NOT limited to events confirmed within the period itself.
+    The pre-tool historical-absorption fallback (see the unscoped
+    branch below) is still skipped in this mode - by agreement, kept
+    simple rather than also reconstructing a per-month breakdown of
+    that lump-sum figure.
     """
-    if period_start is not None:
-        period_po_nos = {
-            row["po_no"] for row in conn.execute(
-                "SELECT DISTINCT po_no FROM commission_events "
-                "WHERE status = 'confirmed' AND trigger_date BETWEEN ? AND ?",
-                (period_start, period_end),
-            )
-        }
-        if not period_po_nos:
-            return []
-        placeholders = ",".join("?" * len(period_po_nos))
-        contract_rows = conn.execute(
-            f"""
-            SELECT
-                c.po_no, c.po_date, c.signature_date, c.customer_id, c.lot_no,
-                c.niche_price, c.promotion, c.discount, c.net_price, c.status,
-                c.full_settlement_paid_date, c.first_installment_paid_date,
-                c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
-                c.fb_lead_referred,
-                c.full_commission_flagged, c.installment_1_commission_flagged,
-                c.installment_6_commission_flagged,
-                c.full_commission_paid_date, c.installment_1_commission_paid_date,
-                c.installment_6_commission_paid_date,
-                cu.name AS customer_name,
-                a.splits_by_agent, a.agency_group, a.commission_split_type
-            FROM contracts c
-            LEFT JOIN customers cu ON cu.customer_id = c.customer_id
-            LEFT JOIN agencies a ON a.agency_code = c.agency_code
-            WHERE c.po_no IN ({placeholders})
-            ORDER BY c.po_no
-            """,
-            list(period_po_nos),
-        ).fetchall()
-    else:
-        contract_rows = conn.execute(
-            """
-            SELECT
-                c.po_no, c.po_date, c.signature_date, c.customer_id, c.lot_no,
-                c.niche_price, c.promotion, c.discount, c.net_price, c.status,
-                c.full_settlement_paid_date, c.first_installment_paid_date,
-                c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
-                c.fb_lead_referred,
-                c.full_commission_flagged, c.installment_1_commission_flagged,
-                c.installment_6_commission_flagged,
-                c.full_commission_paid_date, c.installment_1_commission_paid_date,
-                c.installment_6_commission_paid_date,
-                cu.name AS customer_name,
-                a.splits_by_agent, a.agency_group, a.commission_split_type
-            FROM contracts c
-            LEFT JOIN customers cu ON cu.customer_id = c.customer_id
-            LEFT JOIN agencies a ON a.agency_code = c.agency_code
-            ORDER BY c.po_no
-            """
-        ).fetchall()
+    period_clause = "WHERE c.po_date BETWEEN ? AND ?" if period_start is not None else ""
+    contract_rows = conn.execute(
+        f"""
+        SELECT
+            c.po_no, c.po_date, c.signature_date, c.customer_id, c.lot_no,
+            c.niche_price, c.promotion, c.discount, c.net_price, c.status,
+            c.full_settlement_paid_date, c.first_installment_paid_date,
+            c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
+            c.fb_lead_referred,
+            c.full_commission_flagged, c.installment_1_commission_flagged,
+            c.installment_6_commission_flagged,
+            c.full_commission_paid_date, c.installment_1_commission_paid_date,
+            c.installment_6_commission_paid_date,
+            cu.name AS customer_name,
+            a.splits_by_agent, a.agency_group, a.commission_split_type
+        FROM contracts c
+        LEFT JOIN customers cu ON cu.customer_id = c.customer_id
+        LEFT JOIN agencies a ON a.agency_code = c.agency_code
+        {period_clause}
+        ORDER BY c.po_no
+        """,
+        (period_start, period_end) if period_start is not None else (),
+    ).fetchall()
+    if period_start is not None and not contract_rows:
+        return []
 
     by_po = {}
     for r in contract_rows:
@@ -347,27 +319,20 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
             "installment_6_agent_amount": None,
         }
 
-    if period_start is not None:
-        # Only the in-period trigger(s) - a PO pulled in because its
-        # August installment_1 qualified doesn't also show a July
-        # full_payment figure just because it happened to be confirmed
-        # too; this download is scoped to this period's own activity.
-        event_rows = conn.execute(
-            """
-            SELECT po_no, trigger_type, amount, agency_amount, agent_amount, commission_run_id
-            FROM commission_events
-            WHERE status = 'confirmed' AND trigger_date BETWEEN ? AND ?
-            """,
-            (period_start, period_end),
-        ).fetchall()
-    else:
-        event_rows = conn.execute(
-            """
-            SELECT po_no, trigger_type, amount, agency_amount, agent_amount, commission_run_id
-            FROM commission_events
-            WHERE status = 'confirmed'
-            """
-        ).fetchall()
+    # Unfiltered by date on purpose, in both modes - by_po (built from
+    # contract_rows above) is already scoped to the right PO No's; an
+    # event for a PO not in that set is simply skipped below (`row is
+    # None`). In period mode this means EVERY confirmed event ever
+    # raised for an in-period PO shows here, whenever it was confirmed
+    # - not just ones confirmed "during" the period - matching "show
+    # whatever's confirmed so far for this month's contracts".
+    event_rows = conn.execute(
+        """
+        SELECT po_no, trigger_type, amount, agency_amount, agent_amount, commission_run_id
+        FROM commission_events
+        WHERE status = 'confirmed'
+        """
+    ).fetchall()
 
     for e in event_rows:
         row = by_po.get(e["po_no"])
@@ -375,10 +340,10 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
             continue  # a contract row always exists for a real event; defensive only
         # confirmed_this_run drives two things in _write_table: the
         # yellow cell highlight on an installment commission cell, and
-        # the "movement as at" total beneath it. In period mode every
-        # event here already passed the trigger_date filter above, so
-        # every one of them IS this report's own "movement" - True for
-        # all of them, not tied to any single run.
+        # the "movement as at" total beneath it. In period mode there's
+        # no single "current run" to compare against - every event
+        # shown belongs to this month's own contracts, so all of them
+        # count as this report's own movement.
         confirmed_this_run = True if period_start is not None else (e["commission_run_id"] == commission_run_id)
         if e["trigger_type"] == "full_payment":
             row["full_payment_commission"] = e["amount"]
@@ -640,11 +605,15 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None, period_start=No
         query += " AND COALESCE(c.agent_name, '(unassigned)') = ?"
         params.append(agent_name)
     if period_start is not None:
-        # Filters which events get summed into each run's bucket below,
-        # not which runs appear - a run with events both inside and
-        # outside the period still shows up, but its row only reflects
-        # the in-period slice (see generate_period_report).
-        query += " AND e.trigger_date BETWEEN ? AND ?"
+        # Filters by the PO's own purchase date, not by when the event
+        # was confirmed - matches _load_master_rows: "August's report"
+        # means August-purchased contracts, whatever's been confirmed
+        # for them so far, whenever that happened. A run with events
+        # for both August- and July-purchased POs still shows up here,
+        # but its row only reflects the August-purchased slice - the
+        # "As at" date is still the run's own confirm date (which could
+        # itself be well after August), not the PO's purchase date.
+        query += " AND c.po_date BETWEEN ? AND ?"
         params.append(period_start)
         params.append(period_end)
     query += " ORDER BY r.run_date, r.id"
@@ -1385,36 +1354,37 @@ def generate_period_report(conn, period_start, period_end, output_path):
     strings, inclusive both ends) - the sibling of
     generate_commission_run_report, same sheet structure (an "All"
     sheet, one combined sheet per agency group, one standalone sheet
-    per agent where the group splits by agent), but scoped by
-    commission event trigger_date instead of tied to one specific
-    upload's commission_run_id.
+    per agent where the group splits by agent), but scoped by PO
+    purchase date (po_date) instead of tied to one specific upload's
+    commission_run_id.
 
-    Staff process month by month, but the real Kenjin export is never
-    cut on clean calendar boundaries (one real export covered 1 June -
-    17 Aug, the next 18 Aug - 23 Sep) - this is what actually answers
-    "give me August's Overall Commission report": every PO with a
-    commission event confirmed with a trigger_date in the chosen range
-    shows up, regardless of which upload introduced it, which file it
-    came from, or which month the PO itself was purchased in. A June
-    PO whose installment happens to be confirmed in August shows up
-    here; a June PO with nothing confirmed in August does not, even
-    though it'd still appear on the standing per-run report.
+    Confirmed with the business: "August's report" means every PO
+    PURCHASED in August, full stop - not every PO with something
+    confirmed in August. A June-purchased PO whose installment happens
+    to get confirmed in August stays on JUNE's report (re-download it
+    any time to pick up a late-confirmed payment), never August's,
+    even though a commission event with an August trigger_date exists
+    for it. Every commission event ever confirmed for an in-period PO
+    shows here, regardless of when it was confirmed - this is "show
+    whatever's confirmed so far for this month's contracts", the same
+    logic the standing per-run report uses, just pre-filtered to one
+    month's own POs.
 
     Deliberately does NOT include the pre-tool historical-absorption
-    cutoff money (see _load_master_rows/_load_summary_rows) - that has
-    no clean per-day date to filter by, so it only ever appears on the
-    standing per-run report, never here.
+    cutoff money (see _load_master_rows/_load_summary_rows) - by
+    agreement, kept on the standing per-run report only rather than
+    also reconstructing a per-month breakdown of that lump-sum figure.
 
-    Raises ValueError if nothing was confirmed with a trigger_date in
-    this range at all - same "nothing meaningful to export" reasoning
-    as generate_commission_run_report.
+    Raises ValueError if no PO was purchased in this range at all, or
+    none of them have anything confirmed yet - same "nothing
+    meaningful to export" reasoning as generate_commission_run_report.
     """
     rows = _load_master_rows(conn, commission_run_id=None, run_date=period_end,
                               period_start=period_start, period_end=period_end)
     if not rows:
         raise ValueError(
-            f"Nothing was confirmed with a trigger date between {period_start} and "
-            f"{period_end} - there's nothing to export for this period."
+            f"No PO was purchased between {period_start} and {period_end} - "
+            f"there's nothing to export for this period."
         )
     column_count = len(_COLUMNS)
 

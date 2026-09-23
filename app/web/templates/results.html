@@ -39,8 +39,15 @@
       {% endfor %}
     </table>
     <p><a class="button" href="{{ url_for('web.review', run_id=commission_run_id) }}">Review &amp; confirm</a></p>
+    {% if import_result.new_po_date_min %}
+      <p class="muted">Once you've reviewed &amp; confirmed the above, come back here (or go to Past Reports) to download the {{ import_result.new_po_date_min }} to {{ import_result.new_po_date_max }} Overall Commission report.</p>
+    {% endif %}
   {% else %}
     <p class="muted">Nothing newly due this cycle - every contract in this file either has nothing new since the last upload, or isn't eligible yet. Looking for a report to download? See <a href="{{ url_for('web.reports') }}">Past Reports</a>.</p>
+    {% if import_result.new_po_date_min %}
+      <p><a class="button" href="{{ url_for('web.download_period', period_start=import_result.new_po_date_min, period_end=import_result.new_po_date_max) }}">Download {{ import_result.new_po_date_min }} to {{ import_result.new_po_date_max }} Overall Commission report</a>
+         <span class="muted">&mdash; every PO purchased in this range, with whatever commission has been confirmed for them so far.</span></p>
+    {% endif %}
   {% endif %}
 
   <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>
