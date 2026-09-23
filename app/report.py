@@ -185,7 +185,7 @@ def _clean_remarks(remarks):
     return remarks
 
 
-def _load_master_rows(conn, commission_run_id, run_date, period_start=None, period_end=None):
+def _load_master_rows(conn, commission_run_id, run_date, period_start=None, period_end=None, latest_run_id=None):
     """
     Every contract in the database, always - paid, still pending, or
     cancelled/withdrawn. A PO that hasn't paid anything yet, or was
@@ -221,6 +221,16 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
     branch below) is still skipped in this mode - by agreement, kept
     simple rather than also reconstructing a per-month breakdown of
     that lump-sum figure.
+
+    latest_run_id: in period mode, which commission_run_id counts as
+    "just confirmed" for the yellow-cell highlight - see
+    _latest_confirmed_run_for_period. Regression fix: this used to be
+    hardcoded to "every confirmed event in period mode is this run's
+    own movement", which meant EVERY cell ever confirmed for an
+    in-period PO stayed yellow forever, on every single re-download -
+    round 1's payments never faded back to plain once round 2 added
+    more. Ignored entirely outside period mode, where commission_run_id
+    (this function's own first argument) is compared directly instead.
     """
     period_clause = "WHERE c.po_date BETWEEN ? AND ?" if period_start is not None else ""
     contract_rows = conn.execute(
@@ -341,10 +351,17 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
         # confirmed_this_run drives two things in _write_table: the
         # yellow cell highlight on an installment commission cell, and
         # the "movement as at" total beneath it. In period mode there's
-        # no single "current run" to compare against - every event
-        # shown belongs to this month's own contracts, so all of them
-        # count as this report's own movement.
-        confirmed_this_run = True if period_start is not None else (e["commission_run_id"] == commission_run_id)
+        # no single commission_run_id tied to "this download" the way
+        # the unscoped report has one - latest_run_id (computed once by
+        # generate_period_report, see _latest_confirmed_run_for_period)
+        # stands in for it: only the round of confirmations that most
+        # recently touched this period counts as new, so an earlier
+        # round's cells fade back to plain on a later re-download
+        # instead of staying yellow forever.
+        confirmed_this_run = (
+            e["commission_run_id"] == latest_run_id if period_start is not None
+            else e["commission_run_id"] == commission_run_id
+        )
         if e["trigger_type"] == "full_payment":
             row["full_payment_commission"] = e["amount"]
             row["full_payment_confirmed_this_run"] = confirmed_this_run
@@ -1341,25 +1358,38 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     return output_path
 
 
-def _latest_summary_run_id(summary_rows):
+def _latest_confirmed_run_for_period(conn, period_start, period_end):
     """
-    The run_id of the most recently dated summary row, or None if
-    there isn't one (an empty list, or every row is a historical entry
-    with run_id=None - doesn't come up in period mode, which never
-    merges historical rows, but stays correct either way).
+    The single commission_run_id that most recently confirmed
+    something for an in-period PO (scoped by po_date alone, never by
+    agency or agent), or None if nothing has been confirmed yet for
+    this period at all.
 
     A period report can be regenerated at any time and combines
-    however many separate runs/uploads contributed to it - there's no
-    single "the run that was just processed" the way a per-run
-    download has. The closest useful equivalent, matching what "yellow
-    means new" already signals elsewhere in this report: highlight the
-    row with the latest date_record - _write_summary_table already
-    sorts entries chronologically, so that's simply the last one.
+    however many separate runs/uploads happened to land in it - there's
+    no single "the run that was just processed" the way a per-run
+    download has. This is the closest useful equivalent, and it's
+    computed ONCE for the whole workbook rather than per sheet: "round
+    2 of processing" is one moment in time company-wide, not a
+    separate concept per agency, so the All sheet, every agency group,
+    and every agent all highlight the exact same cells as new. Used for
+    both the main table's yellow cell highlight (_load_master_rows'
+    latest_run_id) and every sheet's Date Record summary table
+    (_write_summary_table's current_run_id) - see generate_period_report.
     """
-    for row in reversed(summary_rows):
-        if row["run_id"] is not None:
-            return row["run_id"]
-    return None
+    row = conn.execute(
+        """
+        SELECT e.commission_run_id AS run_id
+        FROM commission_events e
+        JOIN commission_runs r ON r.id = e.commission_run_id
+        JOIN contracts c ON c.po_no = e.po_no
+        WHERE e.status = 'confirmed' AND c.po_date BETWEEN ? AND ?
+        ORDER BY r.run_date DESC, r.id DESC
+        LIMIT 1
+        """,
+        (period_start, period_end),
+    ).fetchone()
+    return row["run_id"] if row is not None else None
 
 
 def _period_title(label, period_start, period_end, processed_date):
@@ -1412,8 +1442,10 @@ def generate_period_report(conn, period_start, period_end, output_path):
     none of them have anything confirmed yet - same "nothing
     meaningful to export" reasoning as generate_commission_run_report.
     """
+    latest_run_id = _latest_confirmed_run_for_period(conn, period_start, period_end)
     rows = _load_master_rows(conn, commission_run_id=None, run_date=period_end,
-                              period_start=period_start, period_end=period_end)
+                              period_start=period_start, period_end=period_end,
+                              latest_run_id=latest_run_id)
     if not rows:
         raise ValueError(
             f"No PO was purchased between {period_start} and {period_end} - "
@@ -1429,7 +1461,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
     next_row = _write_table(all_sheet, rows, start_row=1, title=all_title, run_date=period_end)
     all_summary_rows = _load_summary_rows(conn, period_start=period_start, period_end=period_end)
     _write_summary_table(
-        all_sheet, all_summary_rows, start_row=next_row, current_run_id=_latest_summary_run_id(all_summary_rows),
+        all_sheet, all_summary_rows, start_row=next_row, current_run_id=latest_run_id,
     )
     _autosize_columns(all_sheet, column_count)
 
@@ -1457,7 +1489,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
         )
         _write_summary_table(
             sheet, group_summary_rows, start_row=group_next_row,
-            current_run_id=_latest_summary_run_id(group_summary_rows),
+            current_run_id=latest_run_id,
             split_group_name=group_name if is_split_group else None,
         )
         _autosize_columns(sheet, split_column_count if is_split_group else column_count)
@@ -1494,7 +1526,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
                 )
                 _write_summary_table(
                     agent_sheet, agent_summary_rows, start_row=agent_next_row,
-                    current_run_id=_latest_summary_run_id(agent_summary_rows),
+                    current_run_id=latest_run_id,
                 )
                 _autosize_columns(agent_sheet, column_count)
 

@@ -1703,6 +1703,68 @@ def test_period_report_highlights_the_latest_summary_row_yellow(tmp_path):
         assert cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
 
 
+def test_period_report_only_the_latest_rounds_commission_cells_stay_yellow(tmp_path):
+    """
+    Regression test: the main table used to mark EVERY confirmed
+    commission cell yellow in period mode, forever, on every
+    re-download - round 1's payments never faded back to plain once
+    round 2 confirmed more (found live: a June PO's already-shown 1st
+    Half Commission was still yellow next to a brand new round's
+    figures, with no way to tell what was actually new this time).
+    Only the cell(s) confirmed by the period's latest round should be
+    yellow; an earlier round's cell must carry forward plain.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 60050, "Customer ID": "CUST250", "Customer Name": "Customer 250",
+        "PO Date": datetime.date(2026, 8, 3),
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": datetime.date(2026, 8, 3),
+        "Agency Code": "AC001",
+    }])
+    result1 = process_upload(db_path, str(xlsx1), run_date=datetime.date(2026, 8, 5))
+    confirm_all_pending(db_path, result1["commission_run_id"])
+
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [
+        {
+            "No": 1, "PO No": 60050, "Customer ID": "CUST250", "Customer Name": "Customer 250",
+            "PO Date": datetime.date(2026, 8, 3),
+            "Niche/Tablet Price (RM)": 10000,
+            "First Instalment Paid Date": datetime.date(2026, 8, 3),
+            "Agency Code": "AC001",
+        },
+        {
+            "No": 2, "PO No": 60051, "Customer ID": "CUST251", "Customer Name": "Customer 251",
+            "PO Date": datetime.date(2026, 8, 20),
+            "Niche/Tablet Price (RM)": 10000,
+            "First Instalment Paid Date": datetime.date(2026, 8, 20),
+            "Agency Code": "AC001",
+        },
+    ])
+    result2 = process_upload(db_path, str(xlsx2), run_date=datetime.date(2026, 8, 27))
+    confirm_all_pending(db_path, result2["commission_run_id"])
+
+    report_path = tmp_path / "august_report.xlsx"
+    generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    headers, data_rows = _find_table_rows(workbook["All"])
+    sheet = workbook["All"]
+    col = headers.index("1st Half Commission (RM)") + 1
+    by_po_row_num = {}
+    for row in sheet.iter_rows(min_row=1):
+        if row[headers.index("PO No")].value in (60050, 60051):
+            by_po_row_num[row[headers.index("PO No")].value] = row[0].row
+
+    round1_cell = sheet.cell(row=by_po_row_num[60050], column=col)
+    round2_cell = sheet.cell(row=by_po_row_num[60051], column=col)
+
+    assert round1_cell.fill.start_color.rgb in ("00000000", None)  # confirmed last round - plain now
+    assert round2_cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")  # confirmed this round - yellow
+
+
 def test_period_report_title_states_when_the_copy_was_processed(tmp_path):
     """
     Unlike the per-run report's "AS AT {run_date}" (a fixed moment - the
