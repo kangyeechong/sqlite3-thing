@@ -25,7 +25,7 @@ from ..pipeline import (
     confirm_events, list_aor_uploads, list_confirmed_runs, list_runs_with_pending_events,
     load_review, process_aor_upload, process_upload,
 )
-from ..report import TRIGGER_LABELS, generate_commission_run_report
+from ..report import TRIGGER_LABELS, generate_commission_run_report, generate_period_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
 from .csrf import validate_csrf_token
 
@@ -388,5 +388,43 @@ def download(run_id):
         buffer,
         as_attachment=True,
         download_name=f"commission_run_{run_id}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@bp.route("/download-period")
+@login_required
+def download_period():
+    """
+    The actual "Overall Commission" report, scoped to a chosen period
+    (see app.report.generate_period_report) - every PO with a
+    commission event CONFIRMED with a trigger_date in the range, not
+    the full standing ledger /download/<run_id> always shows. A plain
+    GET with query params, same reasoning as /download-aor-period:
+    this only reads already-persisted state.
+    """
+    period_start = (request.args.get("period_start") or "").strip()
+    period_end = (request.args.get("period_end") or "").strip()
+    if not period_start or not period_end:
+        abort(400, description="period_start and period_end are both required.")
+    if period_start > period_end:
+        abort(400, description="period_start must not be after period_end.")
+
+    conn = get_connection(current_app.config["DB_PATH"])
+    try:
+        buffer = io.BytesIO()
+        try:
+            generate_period_report(conn, period_start, period_end, buffer)
+        except ValueError:
+            flash(f"Nothing was confirmed between {period_start} and {period_end} - nothing to export.")
+            return redirect(url_for("web.reports"))
+    finally:
+        conn.close()
+    buffer.seek(0)
+
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"commission_{period_start}_to_{period_end}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )

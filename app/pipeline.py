@@ -12,7 +12,7 @@ from .aor import import_aor_report
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
 from .commission import confirm_commission_events, load_events_for_run, process_commission_run
-from .report import generate_commission_run_report
+from .report import generate_commission_run_report, generate_period_report
 
 
 @contextlib.contextmanager
@@ -167,6 +167,17 @@ def generate_report(db_path, commission_run_id, output_path):
     """
     with _connect(db_path) as conn:
         return generate_commission_run_report(conn, commission_run_id, output_path)
+
+
+def generate_period_report_file(db_path, period_start, period_end, output_path):
+    """
+    Writes the downloadable Excel report for a chosen period (ISO date
+    strings) - see app.report.generate_period_report for what makes
+    this different from generate_report above: scoped by commission
+    event trigger_date, not tied to one specific upload's run.
+    """
+    with _connect(db_path) as conn:
+        return generate_period_report(conn, period_start, period_end, output_path)
 
 
 def load_review(db_path, commission_run_id):

@@ -37,6 +37,18 @@
     <p class="muted">Nothing confirmed yet - once a commission run has at least one confirmed commission, it'll show up here.</p>
   {% endif %}
 
+  <h2>Overall Commission by period</h2>
+  <p class="muted">The actual month-scoped report: every PO with a commission confirmed with a trigger date in the range you pick - not the full ledger of every PO ever. A June PO whose installment gets confirmed in August shows up in August's report, not June's.</p>
+  <form method="get" action="{{ url_for('web.download_period') }}">
+    <label>Period start
+      <input type="date" name="period_start" required>
+    </label>
+    <label>Period end
+      <input type="date" name="period_end" required>
+    </label>
+    <button class="button" type="submit">Download Overall Commission report</button>
+  </form>
+
   <h2>AOR payment audit by period</h2>
   <p class="muted">Every receipt dated in a chosen period, across all your AOR uploads so far - not tied to any one upload. Second sheet is just the valid commission-triggering payments among them.</p>
   <form method="get" action="{{ url_for('web.download_aor_period') }}">

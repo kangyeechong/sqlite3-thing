@@ -185,7 +185,7 @@ def _clean_remarks(remarks):
     return remarks
 
 
-def _load_master_rows(conn, commission_run_id, run_date):
+def _load_master_rows(conn, commission_run_id, run_date, period_start=None, period_end=None):
     """
     Every contract in the database, always - paid, still pending, or
     cancelled/withdrawn. A PO that hasn't paid anything yet, or was
@@ -205,27 +205,76 @@ def _load_master_rows(conn, commission_run_id, run_date):
     `run_date` is needed to compute each row's Cooling Off Period
     status (EXPIRED once COOLING_OFF_TOTAL_DAYS have passed since
     Signature Date - see _cooling_off_status).
+
+    period_start/period_end (both required together, or both left
+    None): switches to the scoped mode generate_period_report uses -
+    staff process month by month, but the real Kenjin export is never
+    cut on clean calendar boundaries, so "August's report" means every
+    commission event CONFIRMED with a trigger_date in that range,
+    regardless of which PO's purchase month it is or which upload
+    introduced it. Only contracts with at least one such event appear
+    at all (not the full standing ledger), and only the in-period
+    trigger(s) show a commission figure - an installment confirmed
+    outside the period is left blank here even if it's the same PO,
+    since this specific download is about this specific period's
+    activity. The pre-tool historical-absorption fallback (see the
+    unscoped branch below) is deliberately skipped in this mode: that
+    money has no clean per-day date to filter by.
     """
-    contract_rows = conn.execute(
-        """
-        SELECT
-            c.po_no, c.po_date, c.signature_date, c.customer_id, c.lot_no,
-            c.niche_price, c.promotion, c.discount, c.net_price, c.status,
-            c.full_settlement_paid_date, c.first_installment_paid_date,
-            c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
-            c.fb_lead_referred,
-            c.full_commission_flagged, c.installment_1_commission_flagged,
-            c.installment_6_commission_flagged,
-            c.full_commission_paid_date, c.installment_1_commission_paid_date,
-            c.installment_6_commission_paid_date,
-            cu.name AS customer_name,
-            a.splits_by_agent, a.agency_group, a.commission_split_type
-        FROM contracts c
-        LEFT JOIN customers cu ON cu.customer_id = c.customer_id
-        LEFT JOIN agencies a ON a.agency_code = c.agency_code
-        ORDER BY c.po_no
-        """
-    ).fetchall()
+    if period_start is not None:
+        period_po_nos = {
+            row["po_no"] for row in conn.execute(
+                "SELECT DISTINCT po_no FROM commission_events "
+                "WHERE status = 'confirmed' AND trigger_date BETWEEN ? AND ?",
+                (period_start, period_end),
+            )
+        }
+        if not period_po_nos:
+            return []
+        placeholders = ",".join("?" * len(period_po_nos))
+        contract_rows = conn.execute(
+            f"""
+            SELECT
+                c.po_no, c.po_date, c.signature_date, c.customer_id, c.lot_no,
+                c.niche_price, c.promotion, c.discount, c.net_price, c.status,
+                c.full_settlement_paid_date, c.first_installment_paid_date,
+                c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
+                c.fb_lead_referred,
+                c.full_commission_flagged, c.installment_1_commission_flagged,
+                c.installment_6_commission_flagged,
+                c.full_commission_paid_date, c.installment_1_commission_paid_date,
+                c.installment_6_commission_paid_date,
+                cu.name AS customer_name,
+                a.splits_by_agent, a.agency_group, a.commission_split_type
+            FROM contracts c
+            LEFT JOIN customers cu ON cu.customer_id = c.customer_id
+            LEFT JOIN agencies a ON a.agency_code = c.agency_code
+            WHERE c.po_no IN ({placeholders})
+            ORDER BY c.po_no
+            """,
+            list(period_po_nos),
+        ).fetchall()
+    else:
+        contract_rows = conn.execute(
+            """
+            SELECT
+                c.po_no, c.po_date, c.signature_date, c.customer_id, c.lot_no,
+                c.niche_price, c.promotion, c.discount, c.net_price, c.status,
+                c.full_settlement_paid_date, c.first_installment_paid_date,
+                c.sixth_installment_paid_date, c.agent_name, c.agency_code, c.remarks,
+                c.fb_lead_referred,
+                c.full_commission_flagged, c.installment_1_commission_flagged,
+                c.installment_6_commission_flagged,
+                c.full_commission_paid_date, c.installment_1_commission_paid_date,
+                c.installment_6_commission_paid_date,
+                cu.name AS customer_name,
+                a.splits_by_agent, a.agency_group, a.commission_split_type
+            FROM contracts c
+            LEFT JOIN customers cu ON cu.customer_id = c.customer_id
+            LEFT JOIN agencies a ON a.agency_code = c.agency_code
+            ORDER BY c.po_no
+            """
+        ).fetchall()
 
     by_po = {}
     for r in contract_rows:
@@ -298,19 +347,39 @@ def _load_master_rows(conn, commission_run_id, run_date):
             "installment_6_agent_amount": None,
         }
 
-    event_rows = conn.execute(
-        """
-        SELECT po_no, trigger_type, amount, agency_amount, agent_amount, commission_run_id
-        FROM commission_events
-        WHERE status = 'confirmed'
-        """
-    ).fetchall()
+    if period_start is not None:
+        # Only the in-period trigger(s) - a PO pulled in because its
+        # August installment_1 qualified doesn't also show a July
+        # full_payment figure just because it happened to be confirmed
+        # too; this download is scoped to this period's own activity.
+        event_rows = conn.execute(
+            """
+            SELECT po_no, trigger_type, amount, agency_amount, agent_amount, commission_run_id
+            FROM commission_events
+            WHERE status = 'confirmed' AND trigger_date BETWEEN ? AND ?
+            """,
+            (period_start, period_end),
+        ).fetchall()
+    else:
+        event_rows = conn.execute(
+            """
+            SELECT po_no, trigger_type, amount, agency_amount, agent_amount, commission_run_id
+            FROM commission_events
+            WHERE status = 'confirmed'
+            """
+        ).fetchall()
 
     for e in event_rows:
         row = by_po.get(e["po_no"])
         if row is None:
             continue  # a contract row always exists for a real event; defensive only
-        confirmed_this_run = e["commission_run_id"] == commission_run_id
+        # confirmed_this_run drives two things in _write_table: the
+        # yellow cell highlight on an installment commission cell, and
+        # the "movement as at" total beneath it. In period mode every
+        # event here already passed the trigger_date filter above, so
+        # every one of them IS this report's own "movement" - True for
+        # all of them, not tied to any single run.
+        confirmed_this_run = True if period_start is not None else (e["commission_run_id"] == commission_run_id)
         if e["trigger_type"] == "full_payment":
             row["full_payment_commission"] = e["amount"]
             row["full_payment_confirmed_this_run"] = confirmed_this_run
@@ -349,24 +418,28 @@ def _load_master_rows(conn, commission_run_id, run_date):
     # Nothing here counts as newly confirmed: no confirmed_this_run
     # flag gets touched, so it never highlights yellow or contributes
     # to a "movement as at" figure.
-    has_event = {(e["po_no"], e["trigger_type"]) for e in conn.execute(
-        "SELECT DISTINCT po_no, trigger_type FROM commission_events"
-    )}
-    historical_fallback_triggers = (
-        ("full_payment", "full_commission_flagged", "full_payment_commission",
-         "full_payment_agency_amount", "full_payment_agent_amount"),
-        ("installment_1", "installment_1_commission_flagged", "installment_1_commission",
-         "installment_1_agency_amount", "installment_1_agent_amount"),
-        ("installment_6", "installment_6_commission_flagged", "installment_6_commission",
-         "installment_6_agency_amount", "installment_6_agent_amount"),
-    )
-    for row in by_po.values():
-        for trigger_type, flag_key, amount_key, agency_key, agent_key in historical_fallback_triggers:
-            if row[flag_key] and (row["po_no"], trigger_type) not in has_event:
-                fallback = commission._build_event(row, trigger_type, trigger_date=None)
-                row[amount_key] = fallback["amount"]
-                row[agency_key] = fallback["agency_amount"]
-                row[agent_key] = fallback["agent_amount"]
+    # Skipped entirely in period mode - see this function's docstring:
+    # pre-tool historical-absorption money has no clean per-day date to
+    # filter by, so it never belongs in a period-scoped download.
+    if period_start is None:
+        has_event = {(e["po_no"], e["trigger_type"]) for e in conn.execute(
+            "SELECT DISTINCT po_no, trigger_type FROM commission_events"
+        )}
+        historical_fallback_triggers = (
+            ("full_payment", "full_commission_flagged", "full_payment_commission",
+             "full_payment_agency_amount", "full_payment_agent_amount"),
+            ("installment_1", "installment_1_commission_flagged", "installment_1_commission",
+             "installment_1_agency_amount", "installment_1_agent_amount"),
+            ("installment_6", "installment_6_commission_flagged", "installment_6_commission",
+             "installment_6_agency_amount", "installment_6_agent_amount"),
+        )
+        for row in by_po.values():
+            for trigger_type, flag_key, amount_key, agency_key, agent_key in historical_fallback_triggers:
+                if row[flag_key] and (row["po_no"], trigger_type) not in has_event:
+                    fallback = commission._build_event(row, trigger_type, trigger_date=None)
+                    row[amount_key] = fallback["amount"]
+                    row[agency_key] = fallback["agency_amount"]
+                    row[agent_key] = fallback["agent_amount"]
 
     return list(by_po.values())
 
@@ -481,7 +554,7 @@ def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name):
     ]
 
 
-def _load_summary_rows(conn, agency_group=None, agent_name=None):
+def _load_summary_rows(conn, agency_group=None, agent_name=None, period_start=None, period_end=None):
     """
     Every commission run ever processed (not just this one), grouped
     and pivoted into the "Date Record" running-total table from the
@@ -566,6 +639,14 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
     if agent_name is not None:
         query += " AND COALESCE(c.agent_name, '(unassigned)') = ?"
         params.append(agent_name)
+    if period_start is not None:
+        # Filters which events get summed into each run's bucket below,
+        # not which runs appear - a run with events both inside and
+        # outside the period still shows up, but its row only reflects
+        # the in-period slice (see generate_period_report).
+        query += " AND e.trigger_date BETWEEN ? AND ?"
+        params.append(period_start)
+        params.append(period_end)
     query += " ORDER BY r.run_date, r.id"
 
     cursor = conn.execute(query, params)
@@ -603,19 +684,23 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None):
             r["agent_commission"], r["fb_lead_deduction"],
         ))
 
-    if agency_group is None and agent_name is None:
-        historical = conn.execute(
-            "SELECT date_record, full_commission, first_half_commission, second_half_commission, remarks "
-            "FROM historical_summary_rows"
-        ).fetchall()
-        for h in historical:
-            entries.append((
-                h["date_record"], None,
-                h["full_commission"], h["first_half_commission"], h["second_half_commission"],
-                h["remarks"], 0.0, 0.0,
-            ))
-    else:
-        entries.extend(_reconstruct_scoped_historical_entries(conn, agency_group, agent_name))
+    # Skipped entirely in period mode, same reasoning as
+    # _load_master_rows: pre-tool historical-absorption money has no
+    # clean per-day date to filter by.
+    if period_start is None:
+        if agency_group is None and agent_name is None:
+            historical = conn.execute(
+                "SELECT date_record, full_commission, first_half_commission, second_half_commission, remarks "
+                "FROM historical_summary_rows"
+            ).fetchall()
+            for h in historical:
+                entries.append((
+                    h["date_record"], None,
+                    h["full_commission"], h["first_half_commission"], h["second_half_commission"],
+                    h["remarks"], 0.0, 0.0,
+                ))
+        else:
+            entries.extend(_reconstruct_scoped_historical_entries(conn, agency_group, agent_name))
 
     entries.sort(key=lambda e: e[0])
 
@@ -1280,6 +1365,128 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
                 _write_summary_table(
                     agent_sheet, _load_summary_rows(conn, agency_group=group_name, agent_name=agent_name),
                     start_row=agent_next_row, current_run_id=commission_run_id,
+                )
+                _autosize_columns(agent_sheet, column_count)
+
+    workbook.save(output_path)
+    return output_path
+
+
+def _period_title(label, period_start, period_end):
+    return (
+        f"{label} OVERALL COMMISSION PAYOUT "
+        f"({_format_title_date(period_start)} TO {_format_title_date(period_end)})"
+    )
+
+
+def generate_period_report(conn, period_start, period_end, output_path):
+    """
+    Writes the downloadable Excel file for a chosen period (ISO date
+    strings, inclusive both ends) - the sibling of
+    generate_commission_run_report, same sheet structure (an "All"
+    sheet, one combined sheet per agency group, one standalone sheet
+    per agent where the group splits by agent), but scoped by
+    commission event trigger_date instead of tied to one specific
+    upload's commission_run_id.
+
+    Staff process month by month, but the real Kenjin export is never
+    cut on clean calendar boundaries (one real export covered 1 June -
+    17 Aug, the next 18 Aug - 23 Sep) - this is what actually answers
+    "give me August's Overall Commission report": every PO with a
+    commission event confirmed with a trigger_date in the chosen range
+    shows up, regardless of which upload introduced it, which file it
+    came from, or which month the PO itself was purchased in. A June
+    PO whose installment happens to be confirmed in August shows up
+    here; a June PO with nothing confirmed in August does not, even
+    though it'd still appear on the standing per-run report.
+
+    Deliberately does NOT include the pre-tool historical-absorption
+    cutoff money (see _load_master_rows/_load_summary_rows) - that has
+    no clean per-day date to filter by, so it only ever appears on the
+    standing per-run report, never here.
+
+    Raises ValueError if nothing was confirmed with a trigger_date in
+    this range at all - same "nothing meaningful to export" reasoning
+    as generate_commission_run_report.
+    """
+    rows = _load_master_rows(conn, commission_run_id=None, run_date=period_end,
+                              period_start=period_start, period_end=period_end)
+    if not rows:
+        raise ValueError(
+            f"Nothing was confirmed with a trigger date between {period_start} and "
+            f"{period_end} - there's nothing to export for this period."
+        )
+    column_count = len(_COLUMNS)
+
+    workbook = Workbook()
+    all_sheet = workbook.active
+    all_sheet.title = "All"
+    all_title = _period_title(COMPANY_SHORT_NAME, period_start, period_end)
+    next_row = _write_table(all_sheet, rows, start_row=1, title=all_title, run_date=period_end)
+    _write_summary_table(
+        all_sheet, _load_summary_rows(conn, period_start=period_start, period_end=period_end),
+        start_row=next_row, current_run_id=None,
+    )
+    _autosize_columns(all_sheet, column_count)
+
+    groups = {}
+    for row in rows:
+        groups.setdefault(row["agency_group"], []).append(row)
+    if "(No Agency)" in groups:
+        groups["(No Agency)"] = groups.pop("(No Agency)")
+
+    split_column_count = _SPLIT_COLUMNS_START + len(_SPLIT_COLUMN_GROUPS) * 3 - 1
+
+    used_titles = {"All"}
+    for group_name, group_rows in groups.items():
+        sheet_title = _unique_sheet_title(group_name, used_titles)
+        used_titles.add(sheet_title)
+        sheet = workbook.create_sheet(sheet_title)
+        is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
+        group_title = _period_title(group_name, period_start, period_end)
+        group_next_row = _write_table(
+            sheet, group_rows, start_row=1, title=group_title, run_date=period_end,
+            split_group_name=group_name if is_split_group else None,
+        )
+        _write_summary_table(
+            sheet,
+            _load_summary_rows(conn, agency_group=group_name, period_start=period_start, period_end=period_end),
+            start_row=group_next_row, current_run_id=None,
+            split_group_name=group_name if is_split_group else None,
+        )
+        _autosize_columns(sheet, split_column_count if is_split_group else column_count)
+
+        if any(row["splits_by_agent"] for row in group_rows):
+            agents = {}
+            for row in group_rows:
+                agents.setdefault(row["agent_name"], []).append(row)
+            for agent_name, agent_rows in agents.items():
+                agent_sheet_title = _unique_sheet_title(agent_name, used_titles)
+                used_titles.add(agent_sheet_title)
+                agent_sheet = workbook.create_sheet(agent_sheet_title)
+                is_split_agent = any(row["commission_split_type"] == "agency_agent_split" for row in agent_rows)
+                if is_split_agent:
+                    display_rows = [
+                        {
+                            **row,
+                            "full_payment_commission": row["full_payment_agent_amount"],
+                            "installment_1_commission": row["installment_1_agent_amount"],
+                            "installment_6_commission": row["installment_6_agent_amount"],
+                        }
+                        for row in agent_rows
+                    ]
+                else:
+                    display_rows = agent_rows
+                agent_title = _period_title(agent_name, period_start, period_end)
+                agent_next_row = _write_table(
+                    agent_sheet, display_rows, start_row=1, title=agent_title,
+                    run_date=period_end, split_group_name=None,
+                )
+                _write_summary_table(
+                    agent_sheet,
+                    _load_summary_rows(conn, agency_group=group_name, agent_name=agent_name,
+                                        period_start=period_start, period_end=period_end),
+                    start_row=agent_next_row, current_run_id=None,
                 )
                 _autosize_columns(agent_sheet, column_count)
 

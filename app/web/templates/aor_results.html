@@ -15,6 +15,13 @@
   <p><a class="button" href="{{ url_for('web.download_aor_period', period_start=period_start, period_end=period_end) }}">Download {{ period_start }} to {{ period_end }} payment audit</a>
      <span class="muted">&mdash; every receipt dated in this period across ALL your uploads so far (not just this one file), plus a second sheet with just the valid commission-triggering payments among them.</span></p>
 
+  {% if raised_events %}
+    <p class="muted">Once you've reviewed &amp; confirmed the newly detected commission below, come back here (or go to Past Reports) to download the actual {{ period_start }} to {{ period_end }} Overall Commission report.</p>
+  {% else %}
+    <p><a class="button" href="{{ url_for('web.download_period', period_start=period_start, period_end=period_end) }}">Download {{ period_start }} to {{ period_end }} Overall Commission report</a>
+       <span class="muted">&mdash; the actual month-scoped report: every PO with a commission confirmed in this period, across all your uploads so far.</span></p>
+  {% endif %}
+
   <h2>Import review panel</h2>
   {% if import_result.review_flags %}
     <p class="muted">Nothing here is blocked automatically - these are worth a human glance before relying on the results below.</p>
