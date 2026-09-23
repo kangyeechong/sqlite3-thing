@@ -67,13 +67,26 @@ _BEIGE_FILL = PatternFill(start_color="FBE5D6", end_color="FBE5D6", fill_type="s
 # there's a real file with an FB-lead deduction to check against.
 _GREY_FILL = PatternFill(start_color="BFBFBF", end_color="BFBFBF", fill_type="solid")
 
-# The agency/agent split table is a dense block of otherwise-identical
-# money columns bolted onto the right of the main table - a thin
-# border around every cell (header and data alike) is what makes it
-# read as its own table at a glance instead of bleeding into the
-# columns next to it.
+# A thin border around every cell (header and data alike) is what
+# makes each table read as its own grid at a glance, matching the real
+# reference report - confirmed against a real sample, every actual
+# data table has this; only free-standing text (the title line above a
+# table, "Summary" above the Date Record block) is left unbordered.
 _THIN_SIDE = Side(style="thin", color="000000")
 _THIN_BORDER = Border(left=_THIN_SIDE, right=_THIN_SIDE, top=_THIN_SIDE, bottom=_THIN_SIDE)
+
+
+def _border_row(sheet, row_num, column_count):
+    """
+    Borders every cell across a row, even one whose columns mostly have
+    no value this row (a Total/movement row only writes into a handful
+    of money columns by key - see _write_table/_write_summary_table) -
+    without this, the grid would visibly break for exactly those
+    otherwise-blank cells instead of closing the table off cleanly.
+    """
+    for col in range(1, column_count + 1):
+        sheet.cell(row=row_num, column=col).border = _THIN_BORDER
+
 
 COMPANY_SHORT_NAME = "XEKL"
 
@@ -974,6 +987,7 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
     for col, (label, _key) in enumerate(_COLUMNS, start=1):
         cell = sheet.cell(row=header_row, column=col, value=label)
         cell.font = _HEADER_FONT
+        cell.border = _THIN_BORDER
     row_num += 1
     first_data_row = row_num
 
@@ -1009,6 +1023,7 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
                 value = row.get(key)
             cell = sheet.cell(row=row_num, column=col, value=value)
             cell.font = _BODY_FONT
+            cell.border = _THIN_BORDER
             if label in _MONEY_COLUMNS:
                 cell.number_format = _MONEY_FORMAT
             if is_cancelled_row:
@@ -1054,6 +1069,7 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
         cell = sheet.cell(row=row_num, column=_COLUMN_INDEX[key], value=round(totals[key], 2))
         cell.font = _HEADER_FONT
         cell.number_format = _MONEY_FORMAT
+    _border_row(sheet, row_num, len(_COLUMNS))
     row_num += 1
 
     # "movement as at {date}" - confirmed against the real file (the
@@ -1070,6 +1086,7 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
         cell.font = _BODY_FONT
         cell.number_format = _MONEY_FORMAT
         cell.fill = _YELLOW_FILL
+    _border_row(sheet, row_num, len(_COLUMNS))
     row_num += 1
 
     if split_group_name is not None:
@@ -1125,7 +1142,9 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
 
     header_row = row_num
     for col, label in enumerate(columns, start=1):
-        sheet.cell(row=header_row, column=col, value=label).font = _HEADER_FONT
+        cell = sheet.cell(row=header_row, column=col, value=label)
+        cell.font = _HEADER_FONT
+        cell.border = _THIN_BORDER
     row_num += 1
 
     money_cols = {
@@ -1149,6 +1168,7 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
         for col, (label, value) in enumerate(zip(columns, values), start=1):
             cell = sheet.cell(row=row_num, column=col, value=value)
             cell.font = _BODY_FONT
+            cell.border = _THIN_BORDER
             if label in money_cols or label.startswith("Total for "):
                 cell.number_format = _MONEY_FORMAT
             if is_current_run:
@@ -1190,6 +1210,7 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
                 cell.number_format = _MONEY_FORMAT
                 if grand_total_is_current:
                     cell.fill = _YELLOW_FILL
+        _border_row(sheet, row_num, len(columns))
         row_num += 1
 
     return row_num + 1
