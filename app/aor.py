@@ -93,6 +93,13 @@ class AorImportResult:
     # contribute to one paid-date (see _classify_reference), and a
     # column already on file is never overwritten.
     paid_dates_written: int = 0
+    # Only ever nonzero when period_start/period_end were given (see
+    # import_aor_report) - a receipt whose own Acknowledgment Receipt
+    # Date falls outside the chosen period, or has no date at all, so
+    # it's left completely unprocessed (not recorded as seen) rather
+    # than applied now - it stays available for a later upload whose
+    # period actually covers it.
+    receipts_outside_period: int = 0
     review_flags: list = field(default_factory=list)
 
 
@@ -179,7 +186,8 @@ def _targets_for_classification(kind, numbers):
     return set()
 
 
-def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None):
+def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None,
+                       period_start=None, period_end=None):
     """
     Reads every AOR-shaped sheet in the workbook (a real export often
     has several overlapping ones - see the module docstring), fills in
@@ -202,6 +210,23 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     newly-introduced receipts, never for the transfer logic above,
     which is already correctly scoped via aor_receipts' own
     UNIQUE(acknowledgment_receipt_no).
+
+    period_start/period_end: ISO date strings (both required together,
+    or both left None). The real Kenjin AOR export is never cut on
+    clean calendar-month boundaries (one real export covered 1 June -
+    17 Aug, the next 18 Aug - 23 Sep) - staff process month by month
+    regardless, so a receipt whose own Acknowledgment Receipt Date
+    falls outside the given period is left completely untouched: not
+    recorded into aor_receipts, not applied to a paid-date, nothing.
+    It stays exactly as available for a future upload whose period
+    actually covers it as if this upload had never mentioned it -
+    critically, this is NOT the same as "already imported, skip
+    forever" (that's what aor_receipts itself already guards against);
+    it's "not this period's business yet." A receipt with no
+    Acknowledgment Receipt Date at all is treated the same way when a
+    period is given (there's no date to check it against), rather than
+    flagged as it would be with no period given - see
+    AorImportResult.receipts_outside_period.
 
     Deliberately does not commit the transaction, matching
     import_master_report - the caller decides when to commit.
@@ -245,6 +270,19 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                 continue
             if ack_no in already_imported or ack_no in seen_this_upload:
                 continue  # already applied by this or an earlier (possibly overlapping) upload
+
+            if period_start is not None:
+                receipt_date_for_period = _to_iso_date(raw_row.get("Acknowledgment Receipt Date"))
+                if receipt_date_for_period is None or not (period_start <= receipt_date_for_period <= period_end):
+                    # Checked (and skipped) BEFORE seen_this_upload.add -
+                    # this row must not count as "applied" so a later
+                    # upload whose period actually covers it can still
+                    # pick it up. See the period_start/period_end
+                    # docstring above for why this is deliberately
+                    # different from the already_imported skip above.
+                    result.receipts_outside_period += 1
+                    continue
+
             seen_this_upload.add(ack_no)
 
             if not _is_positive_whole_number(po_no):

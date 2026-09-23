@@ -6,6 +6,13 @@
   <p class="muted">Looking to upload the Master report instead? <a href="{{ url_for('web.upload') }}">Upload Commission Base Report</a>.</p>
   <form method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <p class="muted">The real export isn't cut on clean month boundaries (one file might cover 1 June - 17 Aug, the next 18 Aug - 23 Sep) - enter the period you're actually processing below. Only receipts dated in this range get applied; anything else in the file is left alone for whichever upload's period actually covers it.</p>
+    <label>Period start
+      <input type="date" name="period_start" required>
+    </label>
+    <label>Period end
+      <input type="date" name="period_end" required>
+    </label>
     <label>AOR Report (.xlsx)
       <input type="file" name="report_file" accept=".xlsx" required>
     </label>

@@ -279,6 +279,124 @@ def test_annotate_aor_file_with_no_upload_id_still_shows_everything_in_the_file(
     assert [r[0] for r in rows] == ["TRF 10/08/2026 (INST 01/24)"]
 
 
+def test_a_receipt_outside_the_chosen_period_is_left_for_a_later_upload(tmp_path):
+    """
+    The real Kenjin export is never cut on clean calendar-month
+    boundaries (one real export covered 1 June - 17 Aug, the next
+    18 Aug - 23 Sep), but staff process month by month regardless - a
+    receipt outside the chosen period must be left completely
+    untouched (not recorded into aor_receipts), so a LATER upload
+    scoped to its actual period still picks it up. This is deliberately
+    different from the already-imported skip: that one is permanent,
+    this one is "not yet, try again with the right period."
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80008, "Customer ID": "CUSTA8", "Customer Name": "Customer A8",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-TEST-PERIOD1",
+        "Acknowledgment Receipt Date": datetime.date(2026, 6, 15),  # June, not August
+        "PO No": 80008, "Customer ID": "CUSTA8", "Customer Name": "Customer A8",
+        "Reference No": "TRF 15/06/2026 (INST 01/24)",
+    }])
+
+    # Processing "August" - this June receipt must not be touched.
+    result_august = process_aor_upload(
+        db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17),
+        period_start="2026-08-01", period_end="2026-08-31",
+    )
+    assert result_august["import_result"].receipts_imported == 0
+    assert result_august["import_result"].receipts_outside_period == 1
+    assert result_august["import_result"].paid_dates_written == 0
+    assert result_august["raised_events"] == []
+
+    conn = get_connection(db_path)
+    assert conn.execute(
+        "SELECT first_installment_paid_date FROM contracts WHERE po_no = 80008"
+    ).fetchone()["first_installment_paid_date"] is None
+    conn.close()
+
+    # Re-uploading the SAME file, now scoped to June (its real period) -
+    # the receipt is still there, untouched, ready to be picked up.
+    result_june = process_aor_upload(
+        db_path, str(xlsx_aor), run_date=datetime.date(2026, 6, 17),
+        period_start="2026-06-01", period_end="2026-06-30",
+    )
+    assert result_june["import_result"].receipts_imported == 1
+    assert result_june["import_result"].receipts_outside_period == 0
+    assert result_june["import_result"].paid_dates_written == 1
+    assert len(result_june["raised_events"]) == 1
+
+
+def test_a_june_po_paid_in_august_is_processed_when_uploading_augusts_period(tmp_path):
+    """
+    The whole point of period scoping being receipt-date-based, not
+    PO-date-based: a June-purchased PO whose installment is actually
+    paid in August must still be picked up when processing August -
+    it's the payment's own date that matters, not when the PO was
+    originally bought.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80009, "Customer ID": "CUSTA9", "Customer Name": "Customer A9",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date(2026, 6, 30))
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-TEST-PERIOD2",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),  # paid in August
+        "PO No": 80009, "Customer ID": "CUSTA9", "Customer Name": "Customer A9",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+
+    result_august = process_aor_upload(
+        db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17),
+        period_start="2026-08-01", period_end="2026-08-31",
+    )
+    assert result_august["import_result"].receipts_imported == 1
+    assert result_august["import_result"].paid_dates_written == 1
+    assert len(result_august["raised_events"]) == 1
+    assert result_august["raised_events"][0]["po_no"] == 80009
+
+
+def test_a_receipt_with_no_date_is_left_untouched_when_a_period_is_given(tmp_path):
+    """Can't check a missing date against a period, so it's treated the
+    same as outside-period rather than flagged - a period-less upload
+    still flags it as a genuine data problem (see the sibling test in
+    this file), but under period scoping it's just "not yet"."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80011, "Customer ID": "CUSTA11", "Customer Name": "Customer A11",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-TEST-PERIOD3",
+        "Acknowledgment Receipt Date": None,
+        "PO No": 80011, "Customer ID": "CUSTA11", "Customer Name": "Customer A11",
+        "Reference No": "TRF (INST 01/24)",
+    }])
+
+    result = process_aor_upload(
+        db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17),
+        period_start="2026-08-01", period_end="2026-08-31",
+    )
+    assert result["import_result"].receipts_outside_period == 1
+    assert result["import_result"].review_flags == []
+
+
 def test_a_split_receipt_pair_for_the_same_installment_uses_the_later_date(tmp_path):
     """
     A single logical payment can be split across two receipts on the

@@ -70,7 +70,8 @@ def process_upload(db_path, file_path, run_date=None, created_by_user=None):
     }
 
 
-def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None):
+def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None,
+                        period_start=None, period_end=None):
     """
     Runs the AOR pipeline against one uploaded Acknowledgment of
     Receipt export - the exact same two-step shape as process_upload
@@ -83,6 +84,14 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None):
          Record summary, and the review-and-confirm workflow all keep
          working unchanged, since none of them care where a paid-date
          came from.
+
+    period_start/period_end: ISO date strings, passed straight through
+    to import_aor_report - see its docstring. Staff pick the period
+    they're processing (e.g. "1-31 Aug 2026") up front, since the real
+    export is never cut on clean month boundaries; only receipts
+    genuinely dated in that period get processed this call, so
+    whatever commission_run this produces is naturally scoped to just
+    that period regardless of what else the uploaded file contains.
     """
     if run_date is None:
         run_date = datetime.date.today()
@@ -117,6 +126,7 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None):
 
         import_result = import_aor_report(
             conn, file_path, imported_by_user=created_by_user, aor_upload_id=aor_upload_id,
+            period_start=period_start, period_end=period_end,
         )
 
         run_id, raised_events = process_commission_run(

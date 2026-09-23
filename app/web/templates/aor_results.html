@@ -2,8 +2,12 @@
 {% block title %}AOR Upload Results{% endblock %}
 {% block content %}
   <h1>Results</h1>
+  <p class="muted">Period processed: {{ period_start }} to {{ period_end }}.</p>
   <p>{{ import_result.receipts_seen }} receipt{{ "" if import_result.receipts_seen == 1 else "s" }} read from the file
      ({{ import_result.receipts_imported }} new, {{ import_result.paid_dates_written }} paid-date{{ "" if import_result.paid_dates_written == 1 else "s" }} filled in).</p>
+  {% if import_result.receipts_outside_period %}
+    <p class="muted">{{ import_result.receipts_outside_period }} receipt{{ "" if import_result.receipts_outside_period == 1 else "s" }} in this file fell outside {{ period_start }}-{{ period_end }} (or had no date at all) - left untouched, ready to be picked up whenever you upload for the period they actually belong to.</p>
+  {% endif %}
 
   <p><a class="button" href="{{ url_for('web.download_aor_annotated', upload_id=aor_upload_id) }}">Download annotated copy</a>
      <span class="muted">&mdash; your uploaded file, unchanged, plus one more sheet ("Filtered") with just the rows that mattered pulled out and highlighted (green for a completed full payment, yellow for a 1st/6th installment) &mdash; the same way this gets marked up by hand today.</span></p>

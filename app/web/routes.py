@@ -145,6 +145,23 @@ def upload_aor():
 
     validate_csrf_token(request.form.get("csrf_token"))
 
+    # Asked up front, every upload - the real Kenjin AOR export is
+    # never cut on clean calendar-month boundaries (one real export
+    # covered 1 June - 17 Aug, the next 18 Aug - 23 Sep), but staff
+    # process month by month regardless. Requiring this here (rather
+    # than leaving it optional) is what makes that possible: only
+    # receipts genuinely dated in the chosen period get processed this
+    # upload - see app.aor.import_aor_report's period_start/period_end
+    # docstring for exactly what that does and doesn't do.
+    period_start = (request.form.get("period_start") or "").strip()
+    period_end = (request.form.get("period_end") or "").strip()
+    if not period_start or not period_end:
+        flash("Enter the date range you're processing before uploading.")
+        return render_template("aor_upload.html"), 400
+    if period_start > period_end:
+        flash("The start date is after the end date - check the range and try again.")
+        return render_template("aor_upload.html"), 400
+
     uploaded_file = request.files.get("report_file")
     if uploaded_file is None or uploaded_file.filename == "":
         flash("Choose an AOR (Acknowledgment of Receipt) file first.")
@@ -162,6 +179,8 @@ def upload_aor():
                 saved_path,
                 run_date=datetime.date.today(),
                 created_by_user=session["user_email"],
+                period_start=period_start,
+                period_end=period_end,
             )
         except Exception as exc:
             # Same broad-on-purpose reasoning as upload() above - this
@@ -177,6 +196,8 @@ def upload_aor():
         commission_run_id=result["commission_run_id"],
         aor_upload_id=result["aor_upload_id"],
         trigger_labels=TRIGGER_LABELS,
+        period_start=period_start,
+        period_end=period_end,
     )
 
 

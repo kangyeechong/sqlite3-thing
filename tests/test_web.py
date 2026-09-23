@@ -68,18 +68,27 @@ def _login(client, email="staff@xekl.com", password="correct-horse-battery"):
     )
 
 
-def _upload(client, file_path, filename="upload.xlsx", path="/upload"):
+def _upload(client, file_path, filename="upload.xlsx", path="/upload", extra_data=None):
     token = _csrf_token(client, path)
     with open(file_path, "rb") as f:
+        data = {"report_file": (f, filename), "csrf_token": token}
+        data.update(extra_data or {})
         return client.post(
             path,
-            data={"report_file": (f, filename), "csrf_token": token},
+            data=data,
             content_type="multipart/form-data",
         )
 
 
-def _upload_aor(client, file_path, filename="aor.xlsx"):
-    return _upload(client, file_path, filename=filename, path="/upload-aor")
+def _upload_aor(client, file_path, filename="aor.xlsx", period_start="2026-01-01", period_end="2026-12-31"):
+    # Defaults to a wide-open period covering every test fixture's
+    # dates, matching this route's behavior before period scoping
+    # existed - a test that cares about the scoping itself passes its
+    # own narrower period_start/period_end.
+    return _upload(
+        client, file_path, filename=filename, path="/upload-aor",
+        extra_data={"period_start": period_start, "period_end": period_end},
+    )
 
 
 def _confirm_all_pending(client, run_id):
@@ -398,10 +407,34 @@ def test_aor_upload_without_choosing_a_file_shows_a_clear_message(client):
     _login(client)
     token = _csrf_token(client, "/upload-aor")
     response = client.post(
-        "/upload-aor", data={"csrf_token": token}, content_type="multipart/form-data",
+        "/upload-aor",
+        data={"csrf_token": token, "period_start": "2026-08-01", "period_end": "2026-08-31"},
+        content_type="multipart/form-data",
     )
     assert response.status_code == 400
     assert b"Choose an AOR" in response.data
+
+
+def test_aor_upload_without_a_period_shows_a_clear_message(client):
+    _login(client)
+    token = _csrf_token(client, "/upload-aor")
+    response = client.post(
+        "/upload-aor", data={"csrf_token": token}, content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert b"date range" in response.data
+
+
+def test_aor_upload_with_start_after_end_shows_a_clear_message(client):
+    _login(client)
+    token = _csrf_token(client, "/upload-aor")
+    response = client.post(
+        "/upload-aor",
+        data={"csrf_token": token, "period_start": "2026-08-31", "period_end": "2026-08-01"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert b"start date is after the end date" in response.data
 
 
 def test_aor_full_flow_fills_paid_date_and_reaches_review(client, tmp_path):
