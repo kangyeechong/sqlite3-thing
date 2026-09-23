@@ -1641,3 +1641,63 @@ def test_period_report_combines_pos_across_multiple_uploads(tmp_path):
     workbook = openpyxl.load_workbook(report_path)
     _headers, data_rows = _find_table_rows(workbook["All"])
     assert {row["PO No"] for row in data_rows} == {60027, 60028}
+
+
+def test_period_report_highlights_the_latest_summary_row_yellow(tmp_path):
+    """
+    A period report can be regenerated any time, combining however
+    many separate runs contributed to it - there's no single "the run
+    that was just processed" the way the per-run download has. The
+    closest useful equivalent: the most recently dated "As at" row (and
+    the grand total under it) is shaded yellow, same "what's new" signal
+    as the per-run report, while older rows stay plain.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 60029, "Customer ID": "CUST229", "Customer Name": "Customer 229",
+        "PO Date": datetime.date(2026, 8, 3),
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": datetime.date(2026, 8, 3),
+        "Agency Code": "AC001",
+    }])
+    # run_date well past the 5-day cooling-off gate (rules.py) so
+    # full_payment is actually due, not just detected-but-not-yet-due.
+    result1 = process_upload(db_path, str(xlsx1), run_date=datetime.date(2026, 8, 10))
+    confirm_all_pending(db_path, result1["commission_run_id"])
+
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [
+        {
+            "No": 1, "PO No": 60029, "Customer ID": "CUST229", "Customer Name": "Customer 229",
+            "PO Date": datetime.date(2026, 8, 3),
+            "Niche/Tablet Price (RM)": 10000,
+            "Full Settlement Paid Date": datetime.date(2026, 8, 3),
+            "Agency Code": "AC001",
+        },
+        {
+            "No": 2, "PO No": 60030, "Customer ID": "CUST230", "Customer Name": "Customer 230",
+            "PO Date": datetime.date(2026, 8, 20),
+            "Niche/Tablet Price (RM)": 20000,
+            "Full Settlement Paid Date": datetime.date(2026, 8, 20),
+            "Agency Code": "AC001",
+        },
+    ])
+    result2 = process_upload(db_path, str(xlsx2), run_date=datetime.date(2026, 8, 27))
+    confirm_all_pending(db_path, result2["commission_run_id"])
+
+    report_path = tmp_path / "august_report.xlsx"
+    generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["All"]
+    summary_cells = [row[0] for row in sheet.iter_rows(min_col=1, max_col=1)
+                      if row[0].value and isinstance(row[0].value, str)
+                      and (row[0].value.startswith("As at") or row[0].value.startswith("Total Sum"))]
+
+    assert len(summary_cells) == 3  # 2 "As at" rows + 1 grand total line
+    run1_cell, run2_cell, total_cell = summary_cells
+
+    assert run1_cell.fill.start_color.rgb in ("00000000", None)  # older run - stays plain
+    for cell in (run2_cell, total_cell):  # the latest run - shaded yellow
+        assert cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")

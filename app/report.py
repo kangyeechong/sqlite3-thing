@@ -1341,6 +1341,27 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     return output_path
 
 
+def _latest_summary_run_id(summary_rows):
+    """
+    The run_id of the most recently dated summary row, or None if
+    there isn't one (an empty list, or every row is a historical entry
+    with run_id=None - doesn't come up in period mode, which never
+    merges historical rows, but stays correct either way).
+
+    A period report can be regenerated at any time and combines
+    however many separate runs/uploads contributed to it - there's no
+    single "the run that was just processed" the way a per-run
+    download has. The closest useful equivalent, matching what "yellow
+    means new" already signals elsewhere in this report: highlight the
+    row with the latest date_record - _write_summary_table already
+    sorts entries chronologically, so that's simply the last one.
+    """
+    for row in reversed(summary_rows):
+        if row["run_id"] is not None:
+            return row["run_id"]
+    return None
+
+
 def _period_title(label, period_start, period_end):
     return (
         f"{label} OVERALL COMMISSION PAYOUT "
@@ -1393,9 +1414,9 @@ def generate_period_report(conn, period_start, period_end, output_path):
     all_sheet.title = "All"
     all_title = _period_title(COMPANY_SHORT_NAME, period_start, period_end)
     next_row = _write_table(all_sheet, rows, start_row=1, title=all_title, run_date=period_end)
+    all_summary_rows = _load_summary_rows(conn, period_start=period_start, period_end=period_end)
     _write_summary_table(
-        all_sheet, _load_summary_rows(conn, period_start=period_start, period_end=period_end),
-        start_row=next_row, current_run_id=None,
+        all_sheet, all_summary_rows, start_row=next_row, current_run_id=_latest_summary_run_id(all_summary_rows),
     )
     _autosize_columns(all_sheet, column_count)
 
@@ -1418,10 +1439,12 @@ def generate_period_report(conn, period_start, period_end, output_path):
             sheet, group_rows, start_row=1, title=group_title, run_date=period_end,
             split_group_name=group_name if is_split_group else None,
         )
+        group_summary_rows = _load_summary_rows(
+            conn, agency_group=group_name, period_start=period_start, period_end=period_end,
+        )
         _write_summary_table(
-            sheet,
-            _load_summary_rows(conn, agency_group=group_name, period_start=period_start, period_end=period_end),
-            start_row=group_next_row, current_run_id=None,
+            sheet, group_summary_rows, start_row=group_next_row,
+            current_run_id=_latest_summary_run_id(group_summary_rows),
             split_group_name=group_name if is_split_group else None,
         )
         _autosize_columns(sheet, split_column_count if is_split_group else column_count)
@@ -1452,11 +1475,13 @@ def generate_period_report(conn, period_start, period_end, output_path):
                     agent_sheet, display_rows, start_row=1, title=agent_title,
                     run_date=period_end, split_group_name=None,
                 )
+                agent_summary_rows = _load_summary_rows(
+                    conn, agency_group=group_name, agent_name=agent_name,
+                    period_start=period_start, period_end=period_end,
+                )
                 _write_summary_table(
-                    agent_sheet,
-                    _load_summary_rows(conn, agency_group=group_name, agent_name=agent_name,
-                                        period_start=period_start, period_end=period_end),
-                    start_row=agent_next_row, current_run_id=None,
+                    agent_sheet, agent_summary_rows, start_row=agent_next_row,
+                    current_run_id=_latest_summary_run_id(agent_summary_rows),
                 )
                 _autosize_columns(agent_sheet, column_count)
 
