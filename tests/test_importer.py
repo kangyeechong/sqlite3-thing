@@ -127,6 +127,70 @@ def test_a_gap_in_po_no_sequence_gets_filled_as_a_cancelled_po(tmp_path):
     conn.close()
 
 
+def test_a_cancelled_po_gap_infers_a_po_date_from_its_nearest_real_neighbor(tmp_path):
+    """
+    A synthetic placeholder has no PO Date of its own - Kenjin never
+    assigned one, since the PO was never finalized. Without SOME date
+    it would never show up on any period report at all (period reports
+    are scoped by po_date), so it borrows the nearest real PO No's own
+    date. 80071 is 1 away from 80070 (2026-06-05) and 3 away from
+    80074 (2026-06-20) - the closer neighbor wins.
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 80070, "Customer ID": "CUSTH1", "Customer Name": "Customer H1",
+         "Agency Code": "AC001", "PO Date": datetime.date(2026, 6, 5)},
+        # 80071, 80072, 80073 missing here
+        {"No": 2, "PO No": 80074, "Customer ID": "CUSTH2", "Customer Name": "Customer H2",
+         "Agency Code": "AC001", "PO Date": datetime.date(2026, 6, 20)},
+    ])
+
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx_path))
+    conn.commit()
+
+    assert conn.execute("SELECT po_date FROM contracts WHERE po_no = 80071").fetchone()["po_date"] == "2026-06-05"
+    assert conn.execute("SELECT po_date FROM contracts WHERE po_no = 80073").fetchone()["po_date"] == "2026-06-20"
+    conn.close()
+
+
+def test_an_older_placeholder_missing_a_po_date_is_backfilled_on_a_later_upload(tmp_path):
+    """
+    A placeholder created before this inference existed (or simply
+    surrounded by no dated neighbor at the time) still has po_date=NULL
+    sitting in the ledger - a later upload that adds a dated real PO
+    nearby is a fresh chance to fill it in, even though 80081 itself
+    isn't a "new gap" on this second upload (it was already filled in
+    on the first).
+    """
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [
+        {"No": 1, "PO No": 80080, "Customer ID": "CUSTH3", "Customer Name": "Customer H3", "Agency Code": "AC001"},
+        # 80081 missing, no PO Date anywhere nearby yet - placeholder gets po_date=NULL
+        {"No": 2, "PO No": 80082, "Customer ID": "CUSTH4", "Customer Name": "Customer H4", "Agency Code": "AC001"},
+    ])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx1))
+    conn.commit()
+    assert conn.execute("SELECT po_date FROM contracts WHERE po_no = 80081").fetchone()["po_date"] is None
+
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [
+        {"No": 1, "PO No": 80080, "Customer ID": "CUSTH3", "Customer Name": "Customer H3",
+         "Agency Code": "AC001", "PO Date": datetime.date(2026, 7, 10)},
+        {"No": 2, "PO No": 80082, "Customer ID": "CUSTH4", "Customer Name": "Customer H4", "Agency Code": "AC001"},
+    ])
+    import_master_report(conn, str(xlsx2))
+    conn.commit()
+
+    assert conn.execute("SELECT po_date FROM contracts WHERE po_no = 80081").fetchone()["po_date"] == "2026-07-10"
+    conn.close()
+
+
 def test_a_gap_already_filled_is_not_reflagged_on_a_later_upload(tmp_path):
     """Re-uploading (or extending) the same range must not re-create or
     re-flag a gap that was already filled in on an earlier upload."""

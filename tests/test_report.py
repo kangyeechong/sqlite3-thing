@@ -1701,3 +1701,60 @@ def test_period_report_highlights_the_latest_summary_row_yellow(tmp_path):
     assert run1_cell.fill.start_color.rgb in ("00000000", None)  # older run - stays plain
     for cell in (run2_cell, total_cell):  # the latest run - shaded yellow
         assert cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
+
+
+def test_period_report_title_states_when_the_copy_was_processed(tmp_path):
+    """
+    Unlike the per-run report's "AS AT {run_date}" (a fixed moment - the
+    day that specific run happened), a period report can be
+    regenerated at any time and may show more confirmed commission on a
+    later download than an earlier one for the exact same period. The
+    title must say when THIS copy was generated, not just which period
+    it covers.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60029, "Customer ID": "CUST229", "Customer Name": "Customer 229",
+        "PO Date": datetime.date(2026, 8, 5),
+        "Niche/Tablet Price (RM)": 10000,
+        "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 8, 17))
+
+    report_path = tmp_path / "august_report.xlsx"
+    generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    title = workbook["All"]["A1"].value
+    today_formatted = datetime.date.today().strftime("%d %B %Y").upper()
+    assert "01 AUGUST 2026 TO 31 AUGUST 2026" in title
+    assert f"PROCESSED AS OF {today_formatted}" in title
+
+
+def test_period_report_includes_a_cancelled_po_gap_in_the_month_it_was_inferred_into(tmp_path):
+    """
+    A cancelled-PO gap placeholder (see app.importer._detect_cancelled_po_gaps)
+    has no PO Date of its own, but is given one inferred from its
+    nearest real neighbor precisely so it doesn't just silently vanish
+    from every period download - it must show up on the period report
+    for the month it was inferred into, same as any other PO, shaded
+    beige rather than left off the list entirely.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 60040, "Customer ID": "CUST240", "Customer Name": "Customer 240",
+         "PO Date": datetime.date(2026, 8, 5), "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        # 60041 missing here - inferred cancelled, po_date borrowed from 60040 (nearest neighbor)
+        {"No": 2, "PO No": 60042, "Customer ID": "CUST242", "Customer Name": "Customer 242",
+         "PO Date": datetime.date(2026, 8, 28), "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+    ])
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 8, 29))
+
+    report_path = tmp_path / "august_report.xlsx"
+    generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    _headers, data_rows = _find_table_rows(workbook["All"])
+    assert {row["PO No"] for row in data_rows} == {60040, 60041, 60042}

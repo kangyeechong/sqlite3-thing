@@ -626,6 +626,19 @@ def _detect_cancelled_po_gaps(conn, po_nos_this_upload, now_iso):
     upsert path overwrites this placeholder with the real data, same
     as updating any other existing PO - nothing special needed for
     that to work correctly.
+
+    A placeholder has no PO Date of its own - Kenjin never assigned it
+    one, since the PO was never actually finalized. But PO Nos are
+    handed out in roughly the order contracts get signed, so the
+    nearest real PO No's own PO Date (within this same upload's range)
+    is a solid stand-in, and it's not just cosmetic: the Overall
+    Commission period report is scoped by po_date (see
+    generate_period_report), so a placeholder left with no po_date at
+    all would silently vanish from every period download forever, even
+    though it still shows correctly on the unscoped report. Every
+    upload also gets a fresh chance to backfill an older placeholder
+    that's still missing a date - from before this inference existed,
+    or one that simply had no dated neighbor yet at the time.
     """
     if not po_nos_this_upload:
         return []
@@ -638,21 +651,40 @@ def _detect_cancelled_po_gaps(conn, po_nos_this_upload, now_iso):
             f"safely check for cancelled-PO gaps (likely a typo in one PO No rather than "
             f"{highest - lowest} real cancellations). Skipped; check for a data entry error.",
         )]
+
+    neighbor_rows = conn.execute(
+        "SELECT po_no, po_date, customer_id FROM contracts WHERE po_no BETWEEN ? AND ?",
+        (lowest, highest),
+    ).fetchall()
+    already_real = {row["po_no"] for row in neighbor_rows}
+    dated_neighbors = {row["po_no"]: row["po_date"] for row in neighbor_rows if row["po_date"]}
+
+    def _nearest_date(po_no):
+        if not dated_neighbors:
+            return None
+        nearest_po_no = min(dated_neighbors, key=lambda n: (abs(n - po_no), n))
+        return dated_neighbors[nearest_po_no]
+
+    # customer_id IS NULL is the same signal already_known_po_nos and
+    # _upsert_contract rely on to mean "our own synthetic placeholder,
+    # never a real contract" - safe to backfill without risking a real
+    # PO whose Master report row genuinely has no PO Date.
+    for row in neighbor_rows:
+        if row["customer_id"] is None and not row["po_date"]:
+            inferred = _nearest_date(row["po_no"])
+            if inferred:
+                conn.execute(
+                    "UPDATE contracts SET po_date = ?, updated_at = ? WHERE po_no = ?",
+                    (inferred, now_iso, row["po_no"]),
+                )
+
     missing = [n for n in range(lowest, highest + 1) if n not in po_nos_this_upload]
-    if not missing:
-        return []
-
-    already_real = {
-        row["po_no"] for row in conn.execute(
-            "SELECT po_no FROM contracts WHERE po_no BETWEEN ? AND ?", (lowest, highest)
-        )
-    }
-
     flags = []
     for po_no in missing:
         if po_no in already_real:
             continue  # already a real contract from an earlier upload - not a gap after all
         fields = _build_contract_fields({"PO No": po_no, "Remarks": "Cancelled PO"})
+        fields["po_date"] = _nearest_date(po_no)
         _upsert_contract(conn, fields, now_iso)
         flags.append(ReviewFlag(
             po_no, "inferred_cancelled_po",

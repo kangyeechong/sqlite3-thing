@@ -1362,10 +1362,22 @@ def _latest_summary_run_id(summary_rows):
     return None
 
 
-def _period_title(label, period_start, period_end):
+def _period_title(label, period_start, period_end, processed_date):
+    """
+    Unlike the standing per-run report (title "AS AT {run_date}" - see
+    _title_line), a period report has no single run date: it can be
+    regenerated at any time and combines however many separate
+    uploads/confirmations happened to land in the period, picking up
+    later confirmations each time it's re-downloaded. So the period
+    itself (the PO purchase-date range) goes in the title as before,
+    plus a second line stating the actual date THIS copy was generated
+    - since the same period, downloaded again next week, may show more
+    confirmed commission than it does today.
+    """
     return (
         f"{label} OVERALL COMMISSION PAYOUT "
         f"({_format_title_date(period_start)} TO {_format_title_date(period_end)})"
+        f"\nPROCESSED AS OF {_format_title_date(processed_date)}"
     )
 
 
@@ -1408,11 +1420,12 @@ def generate_period_report(conn, period_start, period_end, output_path):
             f"there's nothing to export for this period."
         )
     column_count = len(_COLUMNS)
+    processed_date = datetime.date.today().isoformat()
 
     workbook = Workbook()
     all_sheet = workbook.active
     all_sheet.title = "All"
-    all_title = _period_title(COMPANY_SHORT_NAME, period_start, period_end)
+    all_title = _period_title(COMPANY_SHORT_NAME, period_start, period_end, processed_date)
     next_row = _write_table(all_sheet, rows, start_row=1, title=all_title, run_date=period_end)
     all_summary_rows = _load_summary_rows(conn, period_start=period_start, period_end=period_end)
     _write_summary_table(
@@ -1434,7 +1447,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
         used_titles.add(sheet_title)
         sheet = workbook.create_sheet(sheet_title)
         is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
-        group_title = _period_title(group_name, period_start, period_end)
+        group_title = _period_title(group_name, period_start, period_end, processed_date)
         group_next_row = _write_table(
             sheet, group_rows, start_row=1, title=group_title, run_date=period_end,
             split_group_name=group_name if is_split_group else None,
@@ -1470,7 +1483,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
                     ]
                 else:
                     display_rows = agent_rows
-                agent_title = _period_title(agent_name, period_start, period_end)
+                agent_title = _period_title(agent_name, period_start, period_end, processed_date)
                 agent_next_row = _write_table(
                     agent_sheet, display_rows, start_row=1, title=agent_title,
                     run_date=period_end, split_group_name=None,
