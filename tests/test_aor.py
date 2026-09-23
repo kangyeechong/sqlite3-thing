@@ -14,7 +14,7 @@ import pytest
 
 import openpyxl
 
-from app.aor import _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file
+from app.aor import _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file, build_period_audit_workbook
 from app.db.connection import get_connection
 from app.pipeline import process_aor_upload, process_upload
 from tests.helpers import AOR_HEADERS, build_aor_report, build_master_report, confirm_all_pending
@@ -740,3 +740,108 @@ def test_annotate_aor_file_sorts_by_po_no_ascending(tmp_path):
     po_col = AOR_HEADERS.index("PO No") + 1
     po_nos = [filtered_sheet.cell(row=r, column=po_col).value for r in range(2, filtered_sheet.max_row + 1)]
     assert po_nos == [20260299, 20260299, 20260300]
+
+
+def _sheet_rows(workbook, sheet_name, headers=("Acknowledgment Receipt No", "PO No", "Receipt Date",
+                                                 "Reference No", "Payment Received (RM)", "Trigger Type",
+                                                 "Source File")):
+    sheet = workbook[sheet_name]
+    rows = []
+    for row_num in range(2, sheet.max_row + 1):
+        values = [sheet.cell(row=row_num, column=col).value for col in range(1, len(headers) + 1)]
+        if all(v is None for v in values):
+            continue
+        rows.append(dict(zip(headers, values)))
+    return rows
+
+
+def test_period_audit_workbook_combines_multiple_uploads_covering_the_same_period(tmp_path):
+    """
+    The whole point of building this from aor_receipts rather than one
+    uploaded file: staff upload August's data across however many
+    overlapping files Kenjin happened to split it into (a real export
+    covered 1 June - 17 Aug, the next 18 Aug - 23 Sep) - the audit for
+    August must show receipts from BOTH uploads together.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [
+        {"No": 1, "PO No": 80080, "Customer ID": "CUSTP1", "Customer Name": "Customer P1", "Agency Code": "AC001"},
+        {"No": 2, "PO No": 80081, "Customer ID": "CUSTP2", "Customer Name": "Customer P2", "Agency Code": "AC001"},
+    ])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_file1 = tmp_path / "file1.xlsx"
+    build_aor_report(xlsx_file1, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-AUDIT-1",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 5),
+        "PO No": 80080, "Customer ID": "CUSTP1", "Customer Name": "Customer P1",
+        "Reference No": "TRF (INST 01/24)", "Payment Received (RM)": 750,
+    }])
+    process_aor_upload(db_path, str(xlsx_file1), run_date=datetime.date(2026, 8, 17),
+                        period_start="2026-08-01", period_end="2026-08-31")
+
+    xlsx_file2 = tmp_path / "file2.xlsx"
+    build_aor_report(xlsx_file2, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-AUDIT-2",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 25),
+        "PO No": 80081, "Customer ID": "CUSTP2", "Customer Name": "Customer P2",
+        "Reference No": "TRF (INST 06/24)", "Payment Received (RM)": 900,
+    }])
+    process_aor_upload(db_path, str(xlsx_file2), run_date=datetime.date(2026, 8, 31),
+                        period_start="2026-08-01", period_end="2026-08-31")
+
+    conn = get_connection(db_path)
+    output_path = tmp_path / "audit.xlsx"
+    build_period_audit_workbook(conn, "2026-08-01", "2026-08-31", str(output_path))
+    conn.close()
+
+    workbook = openpyxl.load_workbook(output_path)
+    all_rows = _sheet_rows(workbook, "All Receipts")
+    assert {r["Acknowledgment Receipt No"] for r in all_rows} == {"RC-AUDIT-1", "RC-AUDIT-2"}
+    valid_rows = _sheet_rows(workbook, "Valid Payments")
+    assert {r["Acknowledgment Receipt No"] for r in valid_rows} == {"RC-AUDIT-1", "RC-AUDIT-2"}
+
+
+def test_period_audit_workbook_separates_non_triggering_and_unmatched_receipts(tmp_path):
+    """
+    "All Receipts" is a complete audit trail (everything, whether or
+    not it mattered); "Valid Payments" is only the ones that actually
+    count toward commission - matched a real PO AND classified as full
+    payment/installment 1/installment 6.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80082, "Customer ID": "CUSTP3", "Customer Name": "Customer P3", "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-AUDIT-DEPOSIT",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 5),
+            "PO No": 80082, "Customer ID": "CUSTP3", "Customer Name": "Customer P3",
+            "Reference No": "DEPOSIT",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-AUDIT-UNMATCHED",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 6),
+            "PO No": 99999999, "Customer ID": "CUSTUNK", "Customer Name": "Customer Unknown",
+            "Reference No": "TRF (INST 01/24)",
+        },
+    ])
+    process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17),
+                        period_start="2026-08-01", period_end="2026-08-31")
+
+    conn = get_connection(db_path)
+    output_path = tmp_path / "audit.xlsx"
+    build_period_audit_workbook(conn, "2026-08-01", "2026-08-31", str(output_path))
+    conn.close()
+
+    workbook = openpyxl.load_workbook(output_path)
+    all_rows = _sheet_rows(workbook, "All Receipts")
+    assert {r["Acknowledgment Receipt No"] for r in all_rows} == {"RC-AUDIT-DEPOSIT", "RC-AUDIT-UNMATCHED"}
+    valid_rows = _sheet_rows(workbook, "Valid Payments")
+    assert valid_rows == []  # neither one counts: one's non-triggering, the other has no matching PO

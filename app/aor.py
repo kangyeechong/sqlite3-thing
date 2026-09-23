@@ -40,9 +40,10 @@ import re
 from dataclasses import dataclass, field
 
 import openpyxl
-from openpyxl.styles import PatternFill
+from openpyxl.styles import Font, PatternFill
+from openpyxl.utils import get_column_letter
 
-from .importer import _is_positive_whole_number, _to_iso_date
+from .importer import _is_positive_whole_number, _to_iso_date, _to_number
 
 # Matches the same green already used elsewhere in this app for "fully
 # paid off" (see app/report.py's _GREEN_FILL) - confirmed against a
@@ -248,7 +249,18 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
         row["acknowledgment_receipt_no"]
         for row in conn.execute("SELECT acknowledgment_receipt_no FROM aor_receipts")
     }
+    # Whether a receipt's own classification counts as a "valid
+    # payment" for build_period_audit_workbook depends on its PO
+    # actually existing - snapshotted once up front rather than
+    # queried per row.
+    existing_po_nos = {row["po_no"] for row in conn.execute("SELECT po_no FROM contracts")}
     seen_this_upload = set()
+    # ack_no -> {po_no, receipt_date, reference_text, payment_received,
+    # trigger_type} - persisted to aor_receipts below regardless of
+    # what a row classified as, so build_period_audit_workbook can
+    # later show every receipt in a chosen period (not just the ones
+    # that mattered) alongside just the valid payments among them.
+    receipt_details = {}
 
     # (po_no, trigger_type) -> latest Acknowledgment Receipt Date seen
     # for it. Several receipts can contribute to the same trigger (e.g.
@@ -271,9 +283,10 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
             if ack_no in already_imported or ack_no in seen_this_upload:
                 continue  # already applied by this or an earlier (possibly overlapping) upload
 
+            receipt_date = _to_iso_date(raw_row.get("Acknowledgment Receipt Date"))
+
             if period_start is not None:
-                receipt_date_for_period = _to_iso_date(raw_row.get("Acknowledgment Receipt Date"))
-                if receipt_date_for_period is None or not (period_start <= receipt_date_for_period <= period_end):
+                if receipt_date is None or not (period_start <= receipt_date <= period_end):
                     # Checked (and skipped) BEFORE seen_this_upload.add -
                     # this row must not count as "applied" so a later
                     # upload whose period actually covers it can still
@@ -284,6 +297,13 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                     continue
 
             seen_this_upload.add(ack_no)
+            receipt_details[ack_no] = {
+                "po_no": None,
+                "receipt_date": receipt_date,
+                "reference_text": raw_row.get("Reference No"),
+                "payment_received": _to_number(raw_row.get("Payment Received (RM)")),
+                "trigger_type": None,
+            }
 
             if not _is_positive_whole_number(po_no):
                 result.review_flags.append(AorReviewFlag(
@@ -291,8 +311,8 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                 ))
                 continue
             po_no = int(po_no)
+            receipt_details[ack_no]["po_no"] = po_no
 
-            receipt_date = _to_iso_date(raw_row.get("Acknowledgment Receipt Date"))
             if receipt_date is None:
                 result.review_flags.append(AorReviewFlag(
                     ack_no, po_no, "Row has no Acknowledgment Receipt Date - skipped.",
@@ -307,7 +327,10 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                     f"pattern - not applied, needs a human to check.",
                 ))
 
-            for target in _targets_for_classification(kind, numbers):
+            targets = _targets_for_classification(kind, numbers)
+            if targets and po_no in existing_po_nos:
+                receipt_details[ack_no]["trigger_type"] = ",".join(sorted(targets))
+            for target in targets:
                 key = (po_no, target)
                 if key not in paid_date_candidates or receipt_date > paid_date_candidates[key]:
                     paid_date_candidates[key] = receipt_date
@@ -317,11 +340,17 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     # chance to see an unrecognized one flagged, re-flagging the exact
     # same receipt on every future overlapping upload adds nothing.
     for ack_no in seen_this_upload:
+        details = receipt_details[ack_no]
         conn.execute(
             "INSERT INTO aor_receipts "
-            "(acknowledgment_receipt_no, imported_at, imported_by_user, source_filename, aor_upload_id) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (ack_no, now_iso, imported_by_user, source_filename, aor_upload_id),
+            "(acknowledgment_receipt_no, po_no, imported_at, imported_by_user, source_filename, "
+            "aor_upload_id, receipt_date, reference_text, payment_received, trigger_type) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (
+                ack_no, details["po_no"], now_iso, imported_by_user, source_filename,
+                aor_upload_id, details["receipt_date"], details["reference_text"],
+                details["payment_received"], details["trigger_type"],
+            ),
         )
     result.receipts_imported = len(seen_this_upload)
 
@@ -470,3 +499,73 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
                 cell.fill = fill
 
     output_workbook.save(output)
+
+
+def build_period_audit_workbook(conn, period_start, period_end, output):
+    """
+    Writes a two-table audit workbook for a chosen period (ISO date
+    strings, inclusive both ends) - built purely from aor_receipts, so
+    it naturally spans however many AOR uploads/files actually cover
+    that period, not just one. Answers "let me check every payment for
+    this period" directly, without having to dig through several
+    separate per-upload annotated copies:
+
+      - "All Receipts": every receipt genuinely dated in this period
+        (receipt_date, not upload date), whatever it turned out to be -
+        deposits, stamp duty, non-1/6 installments, unrecognized text,
+        POs not yet in the ledger, all included. A complete audit trail
+        to cross-check against Kenjin's own totals for the period.
+      - "Valid Payments": the subset that actually counts toward
+        commission - matched a real PO in the ledger AND classified as
+        full payment, installment 1, or installment 6 (see
+        app.aor._classify_reference). This is "the ones we actually
+        want to put into Overall Commission."
+
+    Deliberately reads persisted aor_receipts state, not the original
+    uploaded files - a receipt's classification was already decided at
+    import time (see import_aor_report), so this never re-parses or
+    re-judges anything, just reports back what's already on record.
+    """
+    header_font = Font(bold=True)
+    columns = (
+        ("Acknowledgment Receipt No", "acknowledgment_receipt_no"),
+        ("PO No", "po_no"),
+        ("Receipt Date", "receipt_date"),
+        ("Reference No", "reference_text"),
+        ("Payment Received (RM)", "payment_received"),
+        ("Trigger Type", "trigger_type"),
+        ("Source File", "source_filename"),
+    )
+
+    all_receipts = conn.execute(
+        """
+        SELECT acknowledgment_receipt_no, po_no, receipt_date, reference_text,
+               payment_received, trigger_type, source_filename
+        FROM aor_receipts
+        WHERE receipt_date BETWEEN ? AND ?
+        ORDER BY receipt_date, acknowledgment_receipt_no
+        """,
+        (period_start, period_end),
+    ).fetchall()
+    valid_payments = [r for r in all_receipts if r["trigger_type"]]
+
+    workbook = openpyxl.Workbook()
+
+    def _write_sheet(sheet, title_rows):
+        for col, (label, _) in enumerate(columns, start=1):
+            cell = sheet.cell(row=1, column=col, value=label)
+            cell.font = header_font
+        for row_offset, row in enumerate(title_rows, start=2):
+            for col, (_, key) in enumerate(columns, start=1):
+                sheet.cell(row=row_offset, column=col, value=row[key])
+        for col in range(1, len(columns) + 1):
+            sheet.column_dimensions[get_column_letter(col)].width = 24
+
+    all_sheet = workbook.active
+    all_sheet.title = "All Receipts"
+    _write_sheet(all_sheet, all_receipts)
+
+    valid_sheet = workbook.create_sheet("Valid Payments")
+    _write_sheet(valid_sheet, valid_payments)
+
+    workbook.save(output)

@@ -75,6 +75,14 @@ _MIGRATIONS = [
      "ALTER TABLE commission_events ADD COLUMN confirmed_by_user TEXT", None),
     ("aor_receipts", "aor_upload_id",
      "ALTER TABLE aor_receipts ADD COLUMN aor_upload_id INTEGER REFERENCES aor_uploads(id)", None),
+    ("aor_receipts", "receipt_date",
+     "ALTER TABLE aor_receipts ADD COLUMN receipt_date TEXT", None),
+    ("aor_receipts", "reference_text",
+     "ALTER TABLE aor_receipts ADD COLUMN reference_text TEXT", None),
+    ("aor_receipts", "payment_received",
+     "ALTER TABLE aor_receipts ADD COLUMN payment_received NUMERIC", None),
+    ("aor_receipts", "trigger_type",
+     "ALTER TABLE aor_receipts ADD COLUMN trigger_type TEXT", None),
 ]
 
 # For a brand-new table (not a new column on an existing one) - same

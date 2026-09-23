@@ -12,6 +12,9 @@
   <p><a class="button" href="{{ url_for('web.download_aor_annotated', upload_id=aor_upload_id) }}">Download annotated copy</a>
      <span class="muted">&mdash; your uploaded file, unchanged, plus one more sheet ("Filtered") with just the rows that mattered pulled out and highlighted (green for a completed full payment, yellow for a 1st/6th installment) &mdash; the same way this gets marked up by hand today.</span></p>
 
+  <p><a class="button" href="{{ url_for('web.download_aor_period', period_start=period_start, period_end=period_end) }}">Download {{ period_start }} to {{ period_end }} payment audit</a>
+     <span class="muted">&mdash; every receipt dated in this period across ALL your uploads so far (not just this one file), plus a second sheet with just the valid commission-triggering payments among them.</span></p>
+
   <h2>Import review panel</h2>
   {% if import_result.review_flags %}
     <p class="muted">Nothing here is blocked automatically - these are worth a human glance before relying on the results below.</p>

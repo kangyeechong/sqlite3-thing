@@ -205,6 +205,21 @@ CREATE TABLE IF NOT EXISTS historical_summary_rows (
 -- months' receipts doesn't show them as if newly relevant again - see
 -- the migration and app/aor.py's annotate_aor_file for the full
 -- reasoning.
+-- receipt_date/reference_text/payment_received/trigger_type (added
+-- after the columns above, all nullable - NULL for every row written
+-- before this existed) persist enough about each receipt to build an
+-- audit report for a chosen period later, spanning however many
+-- uploads/files actually cover it - see app/aor.py's
+-- build_period_audit_workbook. trigger_type is NULL for a receipt
+-- that was recognized but non-triggering (a Deposit, Stamp Duty, or
+-- an installment number that isn't 1 or 6) or whose PO wasn't in the
+-- ledger; otherwise it's a comma-joined list of whichever of
+-- full_payment/installment_1/installment_6 this receipt's own
+-- Reference No classified as - a receipt "being" that kind of payment
+-- is a fact about the receipt itself, independent of whether its
+-- specific write ended up changing anything on the contract (an
+-- already-filled paid-date isn't overwritten, but the receipt still
+-- genuinely was, say, an installment 1 payment).
 CREATE TABLE IF NOT EXISTS aor_receipts (
     id                         INTEGER PRIMARY KEY AUTOINCREMENT,
     acknowledgment_receipt_no  TEXT NOT NULL UNIQUE,
@@ -212,7 +227,11 @@ CREATE TABLE IF NOT EXISTS aor_receipts (
     imported_at                TEXT NOT NULL,
     imported_by_user           TEXT,
     source_filename            TEXT,
-    aor_upload_id              INTEGER REFERENCES aor_uploads(id)
+    aor_upload_id              INTEGER REFERENCES aor_uploads(id),
+    receipt_date               TEXT,
+    reference_text             TEXT,
+    payment_received           NUMERIC,
+    trigger_type               TEXT
 );
 
 -- The raw bytes of an uploaded AOR export, kept only so its

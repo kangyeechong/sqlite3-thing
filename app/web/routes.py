@@ -19,7 +19,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from ..aor import annotate_aor_file
+from ..aor import annotate_aor_file, build_period_audit_workbook
 from ..db.connection import get_connection
 from ..pipeline import (
     confirm_events, list_aor_uploads, list_confirmed_runs, list_runs_with_pending_events,
@@ -247,6 +247,44 @@ def download_aor_annotated(upload_id):
         buffer,
         as_attachment=True,
         download_name=f"aor_annotated_{upload_id}.xlsx",
+        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    )
+
+
+@bp.route("/download-aor-period")
+@login_required
+def download_aor_period():
+    """
+    The "check every payment for a period" audit file (see
+    app.aor.build_period_audit_workbook) - two sheets: every receipt
+    dated in the chosen period, and just the ones that were valid
+    commission-triggering payments among them. Built purely from
+    aor_receipts, so it naturally combines however many separate AOR
+    uploads actually cover the period (the real export is routinely
+    split across files that don't respect month boundaries) - not tied
+    to one specific upload the way the annotated-copy download is.
+    A plain GET with query params, not a form post: this only reads
+    already-persisted state, nothing is uploaded or changed.
+    """
+    period_start = (request.args.get("period_start") or "").strip()
+    period_end = (request.args.get("period_end") or "").strip()
+    if not period_start or not period_end:
+        abort(400, description="period_start and period_end are both required.")
+    if period_start > period_end:
+        abort(400, description="period_start must not be after period_end.")
+
+    conn = get_connection(current_app.config["DB_PATH"])
+    try:
+        buffer = io.BytesIO()
+        build_period_audit_workbook(conn, period_start, period_end, buffer)
+    finally:
+        conn.close()
+
+    buffer.seek(0)
+    return send_file(
+        buffer,
+        as_attachment=True,
+        download_name=f"aor_payments_{period_start}_to_{period_end}.xlsx",
         mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
     )
 

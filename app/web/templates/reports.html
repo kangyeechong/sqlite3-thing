@@ -37,6 +37,18 @@
     <p class="muted">Nothing confirmed yet - once a commission run has at least one confirmed commission, it'll show up here.</p>
   {% endif %}
 
+  <h2>AOR payment audit by period</h2>
+  <p class="muted">Every receipt dated in a chosen period, across all your AOR uploads so far - not tied to any one upload. Second sheet is just the valid commission-triggering payments among them.</p>
+  <form method="get" action="{{ url_for('web.download_aor_period') }}">
+    <label>Period start
+      <input type="date" name="period_start" required>
+    </label>
+    <label>Period end
+      <input type="date" name="period_end" required>
+    </label>
+    <button class="button" type="submit">Download payment audit</button>
+  </form>
+
   <h2>Past AOR uploads</h2>
   <p class="muted">Every AOR file ever uploaded, whether or not it happened to raise anything new that time - its annotated copy stays downloadable here.</p>
   {% if aor_uploads %}
