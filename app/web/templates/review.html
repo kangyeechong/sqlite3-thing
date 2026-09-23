@@ -31,8 +31,9 @@
 
   <h2>Confirmed this run</h2>
   {% if confirmed_events %}
+    <p class="muted">Made a mistake confirming one of these (wrong price, a receipt matched to the wrong PO)? Void it below with a reason - it comes off every report immediately, but nothing new appears until the underlying data is corrected and it's detected and confirmed again.</p>
     <table>
-      <tr><th>PO No</th><th>Customer</th><th>Agency</th><th>Agent</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th></tr>
+      <tr><th>PO No</th><th>Customer</th><th>Agency</th><th>Agent</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th><th>Void</th></tr>
       {% for event in confirmed_events %}
         <tr>
           <td>{{ event.po_no }}</td>
@@ -42,12 +43,38 @@
           <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
           <td>{{ event.trigger_date }}</td>
           <td class="money">{{ "%.2f"|format(event.amount) }}</td>
+          <td>
+            <form method="post" action="{{ url_for('web.void_review_event', run_id=run_id) }}">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+              <input type="hidden" name="event_id" value="{{ event.id }}">
+              <input type="text" name="reason" placeholder="Reason (required)" required>
+              <button type="submit" class="button">Void</button>
+            </form>
+          </td>
         </tr>
       {% endfor %}
     </table>
     <p><a class="button" href="{{ url_for('web.download', run_id=run_id) }}">Download Excel report</a></p>
   {% else %}
     <p class="muted">Nothing confirmed yet - no report to download until something is.</p>
+  {% endif %}
+
+  {% if voided_events %}
+    <h2>Voided</h2>
+    <p class="muted">Confirmed commissions that were corrected - kept here for the record, excluded from every report.</p>
+    <table>
+      <tr><th>PO No</th><th>Trigger</th><th>Amount (RM)</th><th>Voided By</th><th>Voided At</th><th>Reason</th></tr>
+      {% for event in voided_events %}
+        <tr>
+          <td>{{ event.po_no }}</td>
+          <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
+          <td class="money">{{ "%.2f"|format(event.amount) }}</td>
+          <td>{{ event.voided_by_user }}</td>
+          <td>{{ event.voided_at }}</td>
+          <td>{{ event.void_reason }}</td>
+        </tr>
+      {% endfor %}
+    </table>
   {% endif %}
 
   <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>

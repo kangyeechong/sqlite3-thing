@@ -161,12 +161,24 @@ CREATE TABLE IF NOT EXISTS commission_events (
     -- is real - see app/web/routes.py's /review pages. Only confirmed
     -- events show up in a downloaded report or the Date Record summary
     -- - detection alone is never enough to treat something as due.
+    -- 'voided': a confirmed event that turned out to be wrong (bad
+    -- price, mismatched receipt, confirmed by mistake) - see
+    -- app.commission.void_commission_event. Never deleted, so the
+    -- mistake and who corrected it stay visible forever (same "nothing
+    -- hidden" standing-ledger philosophy as the rest of this app); just
+    -- excluded from every report the same way a still-pending event
+    -- already is.
     -- The *_commission_flagged columns on contracts are still set the
     -- moment an event is detected (pending or not), so a candidate is
-    -- never raised twice just because it hasn't been confirmed yet.
-    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed')),
+    -- never raised twice just because it hasn't been confirmed yet -
+    -- voiding an event clears its own flag back off so the corrected
+    -- figure can be detected fresh.
+    status              TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'voided')),
     confirmed_at        TEXT,
-    confirmed_by_user   TEXT
+    confirmed_by_user   TEXT,
+    voided_at           TEXT,
+    voided_by_user      TEXT,
+    void_reason         TEXT
 );
 
 -- The real Master sheet carries its own trailing "Date Record"

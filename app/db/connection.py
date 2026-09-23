@@ -44,6 +44,13 @@ _MIGRATIONS = [
      "ALTER TABLE agencies ADD COLUMN commission_split_type TEXT NOT NULL DEFAULT 'flat'", None),
     ("contracts", "fb_lead_referred",
      "ALTER TABLE contracts ADD COLUMN fb_lead_referred INTEGER NOT NULL DEFAULT 0", None),
+    # detected_by_user was in schema.sql from early on but, unlike
+    # every other commission_events column, never got its own
+    # _MIGRATIONS entry - a gap that only surfaced once
+    # _widen_commission_events_status_check (below) started assuming
+    # every column it copies already exists on the old table.
+    ("commission_events", "detected_by_user",
+     "ALTER TABLE commission_events ADD COLUMN detected_by_user TEXT", None),
     ("commission_events", "agency_amount",
      "ALTER TABLE commission_events ADD COLUMN agency_amount NUMERIC", None),
     ("commission_events", "agent_amount",
@@ -83,6 +90,12 @@ _MIGRATIONS = [
      "ALTER TABLE aor_receipts ADD COLUMN payment_received NUMERIC", None),
     ("aor_receipts", "trigger_type",
      "ALTER TABLE aor_receipts ADD COLUMN trigger_type TEXT", None),
+    ("commission_events", "voided_at",
+     "ALTER TABLE commission_events ADD COLUMN voided_at TEXT", None),
+    ("commission_events", "voided_by_user",
+     "ALTER TABLE commission_events ADD COLUMN voided_by_user TEXT", None),
+    ("commission_events", "void_reason",
+     "ALTER TABLE commission_events ADD COLUMN void_reason TEXT", None),
 ]
 
 # For a brand-new table (not a new column on an existing one) - same
@@ -190,6 +203,94 @@ def _run_migrations(conn: sqlite3.Connection) -> None:
         # once this line completes, it can never be skipped again.
         conn.commit()
         applied.add(key)
+
+    # Must run last - it copies every column of commission_events
+    # wholesale, so every ADD COLUMN above needs to have already run
+    # against the old table first. See its own docstring for why this
+    # can't just be another _MIGRATIONS entry.
+    _widen_commission_events_status_check(conn)
+
+
+def _widen_commission_events_status_check(conn: sqlite3.Connection) -> None:
+    """
+    SQLite has no ALTER TABLE for changing a CHECK constraint, so a
+    database created by an older schema.sql (back when 'voided' wasn't
+    yet a valid commission_events.status - see
+    app.commission.void_commission_event) still has that column
+    permanently locked to CHECK (status IN ('pending', 'confirmed')),
+    even after the plain ADD COLUMN entries in _MIGRATIONS above add
+    every new *column* it needs. Voiding an event on such a database
+    would hit a CHECK constraint violation before void_commission_event's
+    own logic ever runs - found by hand-testing against a simulated
+    pre-existing database, not theoretical.
+
+    The standard SQLite fix for a CHECK (or any constraint) that needs
+    to change: rebuild the table under a temp name, copy every row
+    across, drop the old one, rename the new one into place - wrapped
+    in one explicit transaction so a crash mid-rebuild leaves the
+    original table untouched rather than half-migrated.
+
+    Detected by checking the table's own recorded CREATE TABLE text for
+    the literal 'voided' - naturally idempotent and self-skipping on a
+    brand-new database (init_db's schema.sql already allows it from the
+    start, so this never runs there) without needing a separate marker
+    the way the 'status' backfill does.
+
+    Must run after every _MIGRATIONS entry above has already added its
+    column to the OLD table (see _run_migrations' call order) - the
+    INSERT below names every column explicitly and expects all of them
+    to already exist on the table it's copying from.
+    """
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'commission_events'"
+    ).fetchone()
+    if row is None or "'voided'" in row["sql"]:
+        return  # table doesn't exist yet, or already allows 'voided'
+
+    conn.execute("BEGIN")
+    try:
+        conn.execute(
+            """
+            CREATE TABLE commission_events_new (
+                id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+                po_no              INTEGER NOT NULL REFERENCES contracts(po_no),
+                trigger_type       TEXT NOT NULL CHECK (trigger_type IN ('full_payment', 'installment_1', 'installment_6')),
+                trigger_date       TEXT NOT NULL,
+                amount             NUMERIC NOT NULL,
+                agency_amount      NUMERIC,
+                agent_amount       NUMERIC,
+                detected_at        TEXT NOT NULL,
+                detected_by_user   TEXT,
+                commission_run_id  INTEGER REFERENCES commission_runs(id),
+                status             TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed', 'voided')),
+                confirmed_at       TEXT,
+                confirmed_by_user  TEXT,
+                voided_at          TEXT,
+                voided_by_user     TEXT,
+                void_reason        TEXT
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO commission_events_new (
+                id, po_no, trigger_type, trigger_date, amount, agency_amount, agent_amount,
+                detected_at, detected_by_user, commission_run_id, status,
+                confirmed_at, confirmed_by_user, voided_at, voided_by_user, void_reason
+            )
+            SELECT
+                id, po_no, trigger_type, trigger_date, amount, agency_amount, agent_amount,
+                detected_at, detected_by_user, commission_run_id, status,
+                confirmed_at, confirmed_by_user, voided_at, voided_by_user, void_reason
+            FROM commission_events
+            """
+        )
+        conn.execute("DROP TABLE commission_events")
+        conn.execute("ALTER TABLE commission_events_new RENAME TO commission_events")
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
 
 
 def get_connection(db_path: str) -> sqlite3.Connection:

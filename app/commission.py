@@ -141,6 +141,13 @@ _FLAG_COLUMN_UPDATE_SQL = {
     "installment_6": "UPDATE contracts SET installment_6_commission_flagged = 1 WHERE po_no = ?",
 }
 
+# The reverse of _FLAG_COLUMN_UPDATE_SQL - see void_commission_event.
+_FLAG_COLUMN_CLEAR_SQL = {
+    "full_payment": "UPDATE contracts SET full_commission_flagged = 0 WHERE po_no = ?",
+    "installment_1": "UPDATE contracts SET installment_1_commission_flagged = 0 WHERE po_no = ?",
+    "installment_6": "UPDATE contracts SET installment_6_commission_flagged = 0 WHERE po_no = ?",
+}
+
 # Per trigger type: the flat percentage (used for 'flat' agencies), the
 # agency/agent percentages (used for 'agency_agent_split' agencies),
 # and the FB-lead deduction percentage for that trigger.
@@ -271,13 +278,15 @@ def process_commission_run(conn, as_of, run_date, source_filename, created_by_us
 
 def load_events_for_run(conn, commission_run_id):
     """
-    Every event (pending or confirmed) raised in one commission run,
-    with enough contract context for a human to recognize what they're
-    approving - the review page (app/web/routes.py) is the only caller.
+    Every event (pending, confirmed, or voided) raised in one
+    commission run, with enough contract context for a human to
+    recognize what they're approving - the review page
+    (app/web/routes.py) is the only caller.
     """
     return conn.execute(
         """
         SELECT e.id, e.po_no, e.trigger_type, e.trigger_date, e.amount, e.status,
+               e.voided_at, e.voided_by_user, e.void_reason,
                c.agency_code, c.agent_name, cu.name AS customer_name
         FROM commission_events e
         JOIN contracts c ON c.po_no = e.po_no
@@ -320,3 +329,44 @@ def confirm_commission_events(conn, event_ids, confirmed_by_user):
         )
         confirmed_count += cursor.rowcount
     return confirmed_count
+
+
+def void_commission_event(conn, event_id, voided_by_user, reason):
+    """
+    Reverses a confirmed commission event that turned out to be wrong
+    (a bad price, a receipt matched to the wrong PO, confirmed by
+    mistake) - never deletes it, so the mistake and who corrected it
+    stay visible forever (same "nothing hidden" standing-ledger
+    philosophy as the rest of this app; see the 'voided' status
+    comment in schema.sql), just excludes it from every report the same
+    way a still-pending event already is.
+
+    Clears the matching contracts.*_commission_flagged column so the
+    next commission run can detect this PO's trigger fresh, once
+    whatever was actually wrong has been corrected at the source (a
+    re-uploaded Master report, typically). Voiding by itself never
+    creates a new figure - it only un-sticks the PO so the ordinary
+    detect -> review -> confirm pipeline can redo it correctly, the
+    exact same human check a first-time detection gets.
+
+    Only a 'confirmed' event can be voided - a still-pending one just
+    shouldn't be confirmed in the first place, and an already-voided
+    one can't be voided twice. Returns True if it actually voided
+    something, False if event_id doesn't exist or isn't confirmed (a
+    stale page, or a double-submitted form).
+    """
+    event = conn.execute(
+        "SELECT po_no, trigger_type FROM commission_events WHERE id = ? AND status = 'confirmed'",
+        (event_id,),
+    ).fetchone()
+    if event is None:
+        return False
+
+    now_iso = datetime.datetime.now().isoformat()
+    conn.execute(
+        "UPDATE commission_events SET status = 'voided', voided_at = ?, "
+        "voided_by_user = ?, void_reason = ? WHERE id = ?",
+        (now_iso, voided_by_user, reason, event_id),
+    )
+    conn.execute(_FLAG_COLUMN_CLEAR_SQL[event["trigger_type"]], (event["po_no"],))
+    return True

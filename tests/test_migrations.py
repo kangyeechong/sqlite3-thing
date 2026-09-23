@@ -39,6 +39,7 @@ def test_backfill_still_runs_if_a_previous_process_crashed_right_after_the_alter
     raw = sqlite3.connect(db_path)
     raw.executescript(
         """
+        CREATE TABLE commission_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_date TEXT);
         CREATE TABLE contracts (po_no INTEGER PRIMARY KEY);
         CREATE TABLE commission_events (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -104,3 +105,74 @@ def test_backfill_does_not_rerun_once_its_marker_is_recorded(tmp_path):
     conn2.close()
 
     assert status == "pending"
+
+
+def test_an_old_database_with_the_original_status_check_can_still_be_voided(tmp_path):
+    """
+    Regression test: any database created by init_db() before the
+    'voided' status existed has commission_events.status permanently
+    locked to CHECK (status IN ('pending', 'confirmed')) - SQLite has
+    no ALTER TABLE for widening a CHECK constraint, so without
+    _widen_commission_events_status_check rebuilding the table, the
+    very first attempt to void a confirmed event on a real, already-
+    deployed database would fail with a CHECK constraint violation
+    instead of ever reaching void_commission_event's own logic. Found
+    by hand-testing against a simulated pre-existing database, not
+    theoretical - the plain ADD COLUMN migrations alone don't touch
+    the CHECK constraint at all.
+    """
+    db_path = _db_path(tmp_path)
+
+    # A stand-in for a real production ledger.db from before 'voided'
+    # existed - created the same way any real deployment's database
+    # actually was, via a CREATE TABLE that still has the old CHECK.
+    raw = sqlite3.connect(db_path)
+    raw.executescript(
+        """
+        CREATE TABLE commission_runs (id INTEGER PRIMARY KEY AUTOINCREMENT, run_date TEXT);
+        CREATE TABLE contracts (
+            po_no INTEGER PRIMARY KEY, status TEXT, net_price NUMERIC,
+            installment_1_commission_flagged INTEGER NOT NULL DEFAULT 0
+        );
+        CREATE TABLE commission_events (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            po_no INTEGER NOT NULL REFERENCES contracts(po_no),
+            trigger_type TEXT NOT NULL CHECK (trigger_type IN ('full_payment', 'installment_1', 'installment_6')),
+            trigger_date TEXT NOT NULL,
+            amount NUMERIC NOT NULL,
+            detected_at TEXT NOT NULL,
+            commission_run_id INTEGER REFERENCES commission_runs(id),
+            status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'confirmed')),
+            confirmed_at TEXT,
+            confirmed_by_user TEXT
+        );
+        INSERT INTO contracts (po_no, status, net_price, installment_1_commission_flagged)
+            VALUES (1, 'active', 10000, 1);
+        INSERT INTO commission_events (po_no, trigger_type, trigger_date, amount, detected_at, status)
+            VALUES (1, 'installment_1', '2026-08-01', 750.0, '2026-08-01T00:00:00', 'confirmed');
+        """
+    )
+    raw.commit()
+    raw.close()
+
+    conn = get_connection(db_path)
+    event_id = conn.execute("SELECT id FROM commission_events").fetchone()["id"]
+
+    from app.commission import void_commission_event
+    voided = void_commission_event(conn, event_id, "boss@xekl.example", "wrong price")
+    conn.commit()
+
+    assert voided is True
+    row = conn.execute(
+        "SELECT status, void_reason FROM commission_events WHERE id = ?", (event_id,)
+    ).fetchone()
+    assert row["status"] == "voided"
+    assert row["void_reason"] == "wrong price"
+    conn.close()
+
+    # Idempotent: a second connection against the now-rebuilt table
+    # must not error or touch the data again.
+    conn2 = get_connection(db_path)
+    still_one_row = conn2.execute("SELECT COUNT(*) AS n FROM commission_events").fetchone()["n"]
+    conn2.close()
+    assert still_one_row == 1

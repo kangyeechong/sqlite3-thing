@@ -21,15 +21,16 @@
   {% endif %}
 
   <h2>Confirmed reports</h2>
-  <p class="muted">Every commission run that's had at least one commission confirmed on it. The Excel report always reflects the full ledger as it stands today, not a snapshot from when the run was first processed.</p>
+  <p class="muted">Every commission run that's had at least one commission confirmed on it. The Excel report always reflects the full ledger as it stands today, not a snapshot from when the run was first processed. Made a mistake confirming something? Use "Review" to void it, with a reason.</p>
   {% if runs %}
     <table>
-      <tr><th>Run Date</th><th>Source File</th><th></th></tr>
+      <tr><th>Run Date</th><th>Source File</th><th></th><th></th></tr>
       {% for run in runs %}
         <tr>
           <td>{{ run.run_date }}</td>
           <td>{{ run.source_filename or "" }}</td>
           <td><a href="{{ url_for('web.download', run_id=run.id) }}">Download Excel report</a></td>
+          <td><a href="{{ url_for('web.review', run_id=run.id) }}">Review</a></td>
         </tr>
       {% endfor %}
     </table>
@@ -38,7 +39,7 @@
   {% endif %}
 
   <h2>Overall Commission by period</h2>
-  <p class="muted">The actual month-scoped report: every PO with a commission confirmed with a trigger date in the range you pick - not the full ledger of every PO ever. A June PO whose installment gets confirmed in August shows up in August's report, not June's.</p>
+  <p class="muted">Every PO purchased in the range you pick, with whatever commission has been confirmed for it so far - not the full ledger of every PO ever. A June PO whose installment gets confirmed in August stays on June's report (re-download it any time to pick up the late confirmation), never August's.</p>
   <form method="get" action="{{ url_for('web.download_period') }}">
     <label>Period start
       <input type="date" name="period_start" required>

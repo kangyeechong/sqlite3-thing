@@ -206,6 +206,75 @@ def test_full_flow_upload_review_confirm_and_download_produces_a_real_workbook(c
     assert "AC001" in workbook.sheetnames
 
 
+def _void_event(client, run_id, event_id, reason="test mistake"):
+    token = _csrf_token(client, f"/review/{run_id}")
+    return client.post(
+        f"/review/{run_id}/void",
+        data={"csrf_token": token, "event_id": str(event_id), "reason": reason},
+        follow_redirects=True,
+    )
+
+
+def test_voiding_a_confirmed_event_removes_it_from_the_report(client, tmp_path):
+    """
+    A mistake caught after confirming (wrong price, confirmed by
+    accident) must be reversible: voiding it with a reason takes it off
+    every report immediately, and the reason stays visible on the
+    review page for the record - it's never just silently deleted.
+    """
+    _login(client)
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 50002, "Customer ID": "CUSTWEB2", "Customer Name": "Web Test Customer 2",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": settlement_date,
+        "Agency Code": "AC001",
+    }])
+    response = _upload(client, xlsx_path)
+    run_id = int(re.search(rb"/review/(\d+)", response.data).group(1))
+    _confirm_all_pending(client, run_id)
+
+    review_page = client.get(f"/review/{run_id}")
+    event_id = int(re.search(rb'name="event_id" value="(\d+)"', review_page.data).group(1))
+
+    void_response = _void_event(client, run_id, event_id, reason="typed the wrong price")
+    assert void_response.status_code == 200
+    assert b"voided" in void_response.data.lower()
+    assert b"typed the wrong price" in void_response.data
+    assert b"Download Excel report" not in void_response.data  # nothing confirmed on this run anymore
+
+    # Downloading now must bounce back like a never-confirmed run, not
+    # hand back a report that still includes the voided figure.
+    download_response = client.get(f"/download/{run_id}", follow_redirects=True)
+    assert b"confirmed" in download_response.data.lower()
+
+
+def test_voiding_without_a_reason_is_rejected(client, tmp_path):
+    _login(client)
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 50003, "Customer ID": "CUSTWEB3", "Customer Name": "Web Test Customer 3",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": settlement_date,
+        "Agency Code": "AC001",
+    }])
+    response = _upload(client, xlsx_path)
+    run_id = int(re.search(rb"/review/(\d+)", response.data).group(1))
+    _confirm_all_pending(client, run_id)
+
+    review_page = client.get(f"/review/{run_id}")
+    event_id = int(re.search(rb'name="event_id" value="(\d+)"', review_page.data).group(1))
+
+    response = _void_event(client, run_id, event_id, reason="")
+    assert response.status_code == 200
+    assert b"reason is required" in response.data.lower()
+    assert b"Download Excel report" in response.data  # still confirmed - void was rejected
+
+
 def test_upload_with_nothing_due_shows_message_and_no_review_link(client, tmp_path):
     _login(client)
 

@@ -11,7 +11,9 @@ import os
 from .aor import import_aor_report
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
-from .commission import confirm_commission_events, load_events_for_run, process_commission_run
+from .commission import (
+    confirm_commission_events, load_events_for_run, process_commission_run, void_commission_event,
+)
 from .report import generate_commission_run_report, generate_period_report
 
 
@@ -262,3 +264,20 @@ def confirm_events(db_path, commission_run_id, event_ids, confirmed_by_user):
         confirmed_count = confirm_commission_events(conn, list(valid_ids), confirmed_by_user)
         conn.commit()
         return confirmed_count
+
+
+def void_event(db_path, commission_run_id, event_id, voided_by_user, reason):
+    """
+    Voids one confirmed event on this run - must belong to
+    commission_run_id, same defensive scoping as confirm_events (an id
+    for a different run is silently ignored, not just any id the
+    caller happens to pass). Returns True if it actually voided
+    something.
+    """
+    with _connect(db_path) as conn:
+        belongs_to_run = any(row["id"] == event_id for row in load_events_for_run(conn, commission_run_id))
+        if not belongs_to_run:
+            return False
+        voided = void_commission_event(conn, event_id, voided_by_user, reason)
+        conn.commit()
+        return voided

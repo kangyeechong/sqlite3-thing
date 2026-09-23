@@ -23,7 +23,7 @@ from ..aor import annotate_aor_file, build_period_audit_workbook
 from ..db.connection import get_connection
 from ..pipeline import (
     confirm_events, list_aor_uploads, list_confirmed_runs, list_runs_with_pending_events,
-    load_review, process_aor_upload, process_upload,
+    load_review, process_aor_upload, process_upload, void_event,
 )
 from ..report import TRIGGER_LABELS, generate_commission_run_report, generate_period_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
@@ -318,12 +318,14 @@ def review(run_id):
     events = load_review(current_app.config["DB_PATH"], run_id)
     pending_events = [e for e in events if e["status"] == "pending"]
     confirmed_events = [e for e in events if e["status"] == "confirmed"]
+    voided_events = [e for e in events if e["status"] == "voided"]
 
     return render_template(
         "review.html",
         run_id=run_id,
         pending_events=pending_events,
         confirmed_events=confirmed_events,
+        voided_events=voided_events,
         trigger_labels=TRIGGER_LABELS,
     )
 
@@ -351,6 +353,36 @@ def confirm_review(run_id):
         flash(f"Confirmed {confirmed_count} commission(s).")
     else:
         flash("Nothing was confirmed - select at least one row first.")
+
+    return redirect(url_for("web.review", run_id=run_id))
+
+
+@bp.route("/review/<int:run_id>/void", methods=["POST"])
+@login_required
+def void_review_event(run_id):
+    validate_csrf_token(request.form.get("csrf_token"))
+
+    try:
+        event_id = int(request.form.get("event_id", ""))
+    except ValueError:
+        flash("Couldn't void that - invalid event.")
+        return redirect(url_for("web.review", run_id=run_id))
+
+    reason = (request.form.get("reason") or "").strip()
+    if not reason:
+        flash("A reason is required to void a confirmed commission.")
+        return redirect(url_for("web.review", run_id=run_id))
+
+    voided = void_event(
+        current_app.config["DB_PATH"], run_id, event_id, session["user_email"], reason,
+    )
+    if voided:
+        flash(
+            "Commission voided - it won't show on any report until the underlying "
+            "data is corrected and it's detected and confirmed again."
+        )
+    else:
+        flash("Couldn't void that - it may already be voided, or doesn't belong to this run.")
 
     return redirect(url_for("web.review", run_id=run_id))
 
