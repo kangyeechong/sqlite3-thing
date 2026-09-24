@@ -113,10 +113,15 @@ CREATE TABLE IF NOT EXISTS contracts (
     installment_1_commission_flagged INTEGER NOT NULL DEFAULT 0 CHECK (installment_1_commission_flagged IN (0, 1)),
     installment_6_commission_flagged INTEGER NOT NULL DEFAULT 0 CHECK (installment_6_commission_flagged IN (0, 1)),
 
-    -- Purely manual - there is no data signal for this anywhere in the
-    -- Kenjin export. An agent tells staff verbally that a lead came
-    -- from XEKL's own Facebook ads, and staff tick this themselves.
-    -- Only meaningful for agencies with commission_split_type =
+    -- Manual for a routine Kenjin export - there's no data signal for
+    -- this anywhere in it, an agent tells staff verbally that a lead
+    -- came from XEKL's own Facebook ads, and staff tick this
+    -- themselves. Auto-detected instead when onboarding a hand-
+    -- maintained pre-existing file that already has its own AW
+    -- Consultancy-style referral-fee breakdown sheet - see
+    -- app.importer._read_referral_flagged_po_nos - sticky once set,
+    -- never un-set by a later routine upload that doesn't carry that
+    -- sheet. Only meaningful for agencies with commission_split_type =
     -- 'agency_agent_split'; ignored otherwise.
     fb_lead_referred INTEGER NOT NULL DEFAULT 0 CHECK (fb_lead_referred IN (0, 1)),
 

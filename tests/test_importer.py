@@ -511,3 +511,103 @@ def test_new_po_date_range_is_none_when_nothing_has_a_po_date(tmp_path):
     conn.close()
     assert result.new_po_date_min is None
     assert result.new_po_date_max is None
+
+
+def _add_referral_breakdown_sheet(xlsx_path, rows):
+    """
+    Appends a second sheet shaped like the real AW Consultancy
+    hand-maintained split breakdown - confirmed against a real
+    transition file: it repeats "PO No"/"No" (so it can be matched
+    back to the Master sheet's rows) alongside three "XEKL Referral
+    Fee X% (to be deducted from AW Consultancy)" columns, one per
+    trigger (Full Payment 3%, First Half 1.5%, Balance Half 1.5%) -
+    all three share the same suffix text, which is the only thing
+    _read_referral_flagged_po_nos actually keys off.
+
+    rows: list of (no, po_no, full_fee, first_fee, balance_fee) tuples.
+    """
+    workbook = openpyxl.load_workbook(xlsx_path)
+    sheet = workbook.create_sheet("AW Consultancy")
+    headers = [
+        "No", "PO No", "Remarks",
+        "XEKL Referral Fee 3% (to be deducted from AW Consultancy)", "AW Consultancy 7%", "Agent 8%",
+        "XEKL Referral Fee 1.5% (to be deducted from AW Consultancy)", "AW Consultancy 3.5%", "Agent 4%",
+        "XEKL Referral Fee 1.5% (to be deducted from AW Consultancy)", "AW Consultancy 3.5%", "Agent 4%",
+    ]
+    for col, header in enumerate(headers, start=1):
+        sheet.cell(row=1, column=col, value=header)
+    for i, (no, po_no, full_fee, first_fee, balance_fee) in enumerate(rows, start=1):
+        values = [no, po_no, None, full_fee, None, None, first_fee, None, None, balance_fee, None, None]
+        for col, value in enumerate(values, start=1):
+            sheet.cell(row=1 + i, column=col, value=value)
+    workbook.save(xlsx_path)
+
+
+def test_a_po_flagged_by_the_referral_breakdown_sheet_gets_fb_lead_referred_set(tmp_path):
+    """
+    Onboarding a hand-maintained pre-existing file: the PO with a real
+    deduction value in ANY of the three "XEKL Referral Fee" columns on
+    the AW Consultancy breakdown sheet must end up fb_lead_referred=1,
+    and a PO with no deduction anywhere must stay 0 - this sheet is
+    never read for anything else, only this one flag.
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 70060, "Customer ID": "CUSTR1", "Customer Name": "Customer R1",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        {"No": 2, "PO No": 70061, "Customer ID": "CUSTR2", "Customer Name": "Customer R2",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+    ])
+    _add_referral_breakdown_sheet(xlsx_path, [
+        (1, 70060, None, 229.50, None),  # deduction on First Half only
+        (2, 70061, None, None, None),    # no deduction anywhere
+    ])
+
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx_path))
+    conn.commit()
+
+    row60 = conn.execute("SELECT fb_lead_referred FROM contracts WHERE po_no = 70060").fetchone()
+    row61 = conn.execute("SELECT fb_lead_referred FROM contracts WHERE po_no = 70061").fetchone()
+    assert row60["fb_lead_referred"] == 1
+    assert row61["fb_lead_referred"] == 0
+    conn.close()
+
+
+def test_fb_lead_referred_flag_is_sticky_across_a_later_routine_upload(tmp_path):
+    """
+    A live Kenjin export never carries the referral breakdown sheet at
+    all - re-uploading a routine file for the same PO later (no
+    breakdown sheet this time) must not silently un-flag it back to 0.
+    """
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 70062, "Customer ID": "CUSTR3", "Customer Name": "Customer R3",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    _add_referral_breakdown_sheet(xlsx1, [(1, 70062, 300.0, None, None)])
+
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx1))
+    conn.commit()
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 70062"
+    ).fetchone()["fb_lead_referred"] == 1
+
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 70062, "Customer ID": "CUSTR3", "Customer Name": "Customer R3",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Full Settlement Paid Date": datetime.date(2026, 9, 1),
+    }])
+    import_master_report(conn, str(xlsx2))
+    conn.commit()
+
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 70062"
+    ).fetchone()["fb_lead_referred"] == 1  # still flagged, not wiped by the plain re-upload
+    conn.close()

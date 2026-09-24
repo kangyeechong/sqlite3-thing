@@ -183,6 +183,72 @@ def _read_historical_summary_rows(sheet):
     return rows
 
 
+# The literal suffix shared by all three "XEKL Referral Fee X% (to be
+# deducted from AW Consultancy)" columns on the AW Consultancy split
+# breakdown sheet (confirmed against a real transition file) -
+# deliberately just the suffix, not the whole header, since the 3%/
+# 1.5%/1.5% prefix differs by trigger (Full Payment/First Half/Balance
+# Half) but this part is identical across all three.
+_REFERRAL_FEE_HEADER_MARKER = "to be deducted from AW Consultancy"
+
+
+def _read_referral_flagged_po_nos(workbook):
+    """
+    Scans every sheet in the workbook for the AW Consultancy-style
+    split-commission breakdown (three repeated column groups - Full
+    Payment/First Half/Balance Half - each led by a "XEKL Referral Fee
+    X% (to be deducted from AW Consultancy)" column) and returns the
+    set of PO Nos with a real, positive deduction value in ANY of
+    those columns, for ANY trigger.
+
+    Only ever present on a hand-maintained file from before this tool
+    existed - confirmed with the business, a live Kenjin export never
+    carries this breakdown - so this is purely for onboarding old
+    history: a routine upload simply has no such sheet, this returns
+    an empty set, and nothing about normal processing changes.
+
+    Deliberately doesn't care WHICH of the three trigger columns had
+    the value, or attribute it back to a specific trigger -
+    fb_lead_referred is a flag on the PO itself, not per-trigger (see
+    rules.py/commission.py): once a PO's referral status is known from
+    ANY of its triggers, it applies to every future one too.
+    """
+    flagged = set()
+    for sheet in workbook.worksheets:
+        header_row_num = None
+        po_col = no_col = None
+        referral_cols = []
+        for row in sheet.iter_rows(min_row=1, max_row=30):
+            values = [cell.value for cell in row]
+            if "PO No" not in values or "No" not in values:
+                continue
+            cols = [
+                cell.column for cell in row
+                if isinstance(cell.value, str) and _REFERRAL_FEE_HEADER_MARKER in cell.value
+            ]
+            if not cols:
+                continue
+            header_row_num = row[0].row
+            po_col = values.index("PO No") + 1
+            no_col = values.index("No") + 1
+            referral_cols = cols
+            break
+        if header_row_num is None:
+            continue  # not a referral-breakdown sheet
+
+        for row in sheet.iter_rows(min_row=header_row_num + 1):
+            no_value = row[no_col - 1].value
+            if not _is_positive_whole_number(no_value):
+                break
+            po_no = row[po_col - 1].value
+            if not _is_positive_whole_number(po_no):
+                continue
+            has_deduction = any((_to_number(row[col - 1].value) or 0) > 0 for col in referral_cols)
+            if has_deduction:
+                flagged.add(int(po_no))
+    return flagged
+
+
 def _existed_by_cutoff(contract, cutoff_iso_date):
     """
     True if this contract's own PO Date or Signature Date - a real,
@@ -391,6 +457,14 @@ def _build_contract_fields(raw_row):
         "installment_1_commission_paid_date": _to_iso_date(raw_row.get("1st Half Commission Paid Date")),
         "installment_6_commission_paid_date": _to_iso_date(raw_row.get("Balance Half Commission Paid Date")),
         "remarks": remarks,
+        # Overridden to 1 by import_master_report for a PO found in
+        # this upload's own AW Consultancy-style referral-fee
+        # breakdown sheet (see _read_referral_flagged_po_nos) - left at
+        # the schema default here since a live Kenjin export never
+        # carries that sheet at all, and _upsert_contract's sticky
+        # merge means this default never wipes out an already-known
+        # flag from an earlier upload.
+        "fb_lead_referred": 0,
     }
 
 
@@ -530,7 +604,7 @@ def _upsert_contract(conn, fields, now_iso):
             sixth_installment_paid_date,
             full_commission_paid_date, installment_1_commission_paid_date,
             installment_6_commission_paid_date,
-            remarks, updated_at
+            remarks, fb_lead_referred, updated_at
         ) VALUES (
             :po_no, :customer_id, :agent_name, :agency_code, :lot_no,
             :po_date, :signature_date, :niche_price, :promotion, :discount,
@@ -539,7 +613,7 @@ def _upsert_contract(conn, fields, now_iso):
             :sixth_installment_paid_date,
             :full_commission_paid_date, :installment_1_commission_paid_date,
             :installment_6_commission_paid_date,
-            :remarks, :now
+            :remarks, :fb_lead_referred, :now
         )
         ON CONFLICT(po_no) DO UPDATE SET
             customer_id = excluded.customer_id,
@@ -586,6 +660,15 @@ def _upsert_contract(conn, fields, now_iso):
             installment_1_commission_paid_date = COALESCE(excluded.installment_1_commission_paid_date, contracts.installment_1_commission_paid_date),
             installment_6_commission_paid_date = COALESCE(excluded.installment_6_commission_paid_date, contracts.installment_6_commission_paid_date),
             remarks = excluded.remarks,
+            -- Sticky, never regresses: a routine Kenjin upload has no
+            -- referral-fee breakdown sheet at all (see
+            -- _read_referral_flagged_po_nos), so fields["fb_lead_referred"]
+            -- defaults to 0 for every PO not found in THIS upload's own
+            -- breakdown - a blind overwrite would silently un-flag a PO
+            -- an earlier transition upload had already correctly marked.
+            -- Once a PO is known to be referral-sourced, it stays that
+            -- way regardless of what any later upload does or doesn't say.
+            fb_lead_referred = MAX(excluded.fb_lead_referred, contracts.fb_lead_referred),
             updated_at = excluded.updated_at
         """,
         {**fields, "now": now_iso},
@@ -732,6 +815,8 @@ def import_master_report(conn, file_path, imported_by_user=None):
             f"{_REQUIRED_HEADERS} - is this really a Commission Base Report?"
         )
 
+    referral_flagged_po_nos = _read_referral_flagged_po_nos(workbook)
+
     all_fields = []
     skip_flags = []
     for raw_row in _read_rows(master_sheet):
@@ -745,7 +830,10 @@ def import_master_report(conn, file_path, imported_by_user=None):
                 f"Row 'No'={raw_row.get('No')} has no valid PO No and was not imported.",
             ))
             continue
-        all_fields.append(_build_contract_fields(raw_row))
+        fields = _build_contract_fields(raw_row)
+        if fields["po_no"] in referral_flagged_po_nos:
+            fields["fb_lead_referred"] = 1
+        all_fields.append(fields)
 
     # Snapshotted before any upsert below runs, so this reflects what
     # the ledger knew BEFORE this upload - see ImportResult's own
