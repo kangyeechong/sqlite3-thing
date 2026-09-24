@@ -371,21 +371,28 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     return result
 
 
-def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end):
+def annotate_aor_file(file_path, output, po_period_start, po_period_end):
     """
     Writes a copy of the AOR export to `output` (a path or a file-like
     object) - every original sheet left exactly as uploaded (a genuine
     1:1 copy for cross-referencing against what was actually uploaded,
     formulas and all - see the "reads the file twice" note below),
     plus two new sheets built from the SAME raw rows, both scoped by
-    the PO's own PURCHASE date (po_period_start/po_period_end, ISO
-    date strings, inclusive both ends) - a different axis from the
-    receipt date the file itself carries (payments received this month
-    routinely settle POs purchased in an earlier one):
+    each row's own Purchase Statement Date (po_period_start/
+    po_period_end, ISO date strings, inclusive both ends) - a different
+    axis from the row's own Acknowledgment Receipt Date (payments
+    received this month routinely settle POs purchased, and thus
+    statemented, in an earlier one). Read straight from the file's own
+    column, never looked up from the ledger - every row already
+    carries its own Purchase Statement Date regardless of whether that
+    PO has made it into a Master report upload yet, so a receipt for a
+    PO nobody's uploaded the Master report for is still worth seeing
+    here.
 
-      - "Payments (PO Date)": every row whose own PO was purchased in
-        that range, using the file's own raw columns verbatim - the
-        real AOR export's own Customer ID/Name are frequently blank,
+      - "Payments (PO Date)": every row whose own Purchase Statement
+        Date falls in that range, using the file's own raw columns
+        verbatim - the real AOR export's own Customer ID/Name are
+        frequently blank,
         and this is deliberately NOT enriched from the ledger - this
         sheet is purely a faithful reflection of what's actually in
         the file, the same "exact copy" spirit as the untouched
@@ -444,27 +451,6 @@ def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end):
             if kind == "full_payment":
                 full_payment_pos.add(int(po_no))
 
-    # PO Date is never in the AOR export itself (confirmed - Kenjin's
-    # AOR file has no such column) - looked up from the ledger once,
-    # by whichever PO Nos this file actually mentions, purely to
-    # decide which rows belong in the two new sheets. Never shown as
-    # its own column: the point of these two sheets is the file's own
-    # raw data, untouched by ledger enrichment.
-    file_po_nos = {
-        int(raw_row["PO No"])
-        for sheet in aor_sheets for raw_row in _read_aor_rows(sheet)
-        if _is_positive_whole_number(raw_row.get("PO No"))
-    }
-    po_dates_by_po_no = {}
-    if file_po_nos:
-        placeholders = ",".join("?" for _ in file_po_nos)
-        po_dates_by_po_no = {
-            row["po_no"]: row["po_date"] for row in conn.execute(
-                f"SELECT po_no, po_date FROM contracts WHERE po_no IN ({placeholders})",
-                tuple(file_po_nos),
-            )
-        }
-
     # Second pass: build both new sheets' rows in one walk through the
     # file, in the order rows appear - same spirit as a human scrolling
     # through it top to bottom and filtering as they go.
@@ -479,8 +465,8 @@ def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end):
             headers = sheet_headers
         for raw_row in _read_aor_rows(sheet):
             po_no = raw_row.get("PO No")
-            po_date = po_dates_by_po_no.get(int(po_no)) if _is_positive_whole_number(po_no) else None
-            if po_date is None or not (po_period_start <= po_date <= po_period_end):
+            statement_date = _to_iso_date(raw_row.get("Purchase Statement Date"))
+            if statement_date is None or not (po_period_start <= statement_date <= po_period_end):
                 continue
 
             kind, numbers = _classify_reference(raw_row.get("Reference No"))

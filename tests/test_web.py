@@ -597,18 +597,11 @@ def test_past_reports_lists_aor_uploads_even_with_nothing_newly_due(client, tmp_
 def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     _login(client)
 
-    xlsx_master = tmp_path / "master.xlsx"
-    build_master_report(xlsx_master, [{
-        "No": 1, "PO No": 99998, "Customer ID": "CUSTWEBAOR3", "Customer Name": "Web AOR Customer 3",
-        "PO Date": datetime.date(2026, 8, 1), "Agency Code": "AC001",
-    }])
-    upload_response = _upload(client, xlsx_master)
-    assert upload_response.status_code == 200
-
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [{
         "No": 1, "Acknowledgment Receipt No": "RC-WEB-0003",
         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "Purchase Statement Date": datetime.date(2026, 8, 5),
         "PO No": 99998, "Customer ID": "CUSTWEBAOR3", "Customer Name": "Web AOR Customer 3",
         "Reference No": "HLB 000000 STAMP DUTY",
     }])
@@ -632,7 +625,10 @@ def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     # The original sheet comes through untouched...
     original_sheet = workbook.worksheets[0]
     assert original_sheet.cell(row=23, column=1).value == 1
-    # ...and a stamp duty row isn't a full-payment or installment 1/6
+    # ...its Purchase Statement Date puts it in "Payments (PO Date)"...
+    payments_sheet = workbook["Payments (PO Date)"]
+    assert payments_sheet.cell(row=2, column=1).value == 1
+    # ...but a stamp duty row isn't a full-payment or installment 1/6
     # receipt, so the new "Valid Payments (PO Date)" sheet has no data
     # rows for it.
     valid_sheet = workbook["Valid Payments (PO Date)"]
