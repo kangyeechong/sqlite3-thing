@@ -26,13 +26,20 @@
     <table>
       <tr><th>Run Date</th><th>Source File</th><th></th><th></th></tr>
       {% for run in runs %}
-        <tr>
+        <tr{% if loop.index > 5 %} class="hidden-row" style="display:none"{% endif %}>
           <td>{{ run.run_date }}</td>
           <td>{{ run.source_filename or "" }}</td>
           <td><a href="{{ url_for('web.download', run_id=run.id) }}">Download Excel report</a></td>
           <td><a href="{{ url_for('web.review', run_id=run.id) }}">Review</a></td>
         </tr>
       {% endfor %}
+      {% if runs|length > 5 %}
+        <tr>
+          <td colspan="4">
+            <button type="button" class="button" onclick="this.closest('table').querySelectorAll('.hidden-row').forEach(function(r){r.style.display='table-row';}); this.closest('tr').style.display='none';">Show {{ runs|length - 5 }} more</button>
+          </td>
+        </tr>
+      {% endif %}
     </table>
   {% else %}
     <p class="muted">Nothing confirmed yet - once a commission run has at least one confirmed commission, it'll show up here.</p>
@@ -56,7 +63,7 @@
     <table>
       <tr><th>Uploaded At</th><th>Source File</th><th></th></tr>
       {% for upload in aor_uploads %}
-        <tr>
+        <tr{% if loop.index > 5 %} class="hidden-row" style="display:none"{% endif %}>
           <td>{{ upload.uploaded_at }}</td>
           <td>{{ upload.filename or "" }}</td>
           <td>
@@ -68,6 +75,13 @@
           </td>
         </tr>
       {% endfor %}
+      {% if aor_uploads|length > 5 %}
+        <tr>
+          <td colspan="3">
+            <button type="button" class="button" onclick="this.closest('table').querySelectorAll('.hidden-row').forEach(function(r){r.style.display='table-row';}); this.closest('tr').style.display='none';">Show {{ aor_uploads|length - 5 }} more</button>
+          </td>
+        </tr>
+      {% endif %}
     </table>
   {% else %}
     <p class="muted">No AOR files uploaded yet.</p>
