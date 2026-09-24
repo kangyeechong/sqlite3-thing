@@ -166,24 +166,26 @@ def test_reuploading_an_overlapping_aor_export_does_not_reapply_receipts(tmp_pat
     assert result2["raised_events"] == []  # nothing new - already flagged from the first upload
 
 
-def test_annotate_aor_file_scoped_to_upload_excludes_an_earlier_uploads_receipts(tmp_path):
+def test_annotate_aor_file_shows_a_receipt_even_if_an_earlier_upload_recorded_it_first(tmp_path):
     """
-    Staff process month by month, but the real Kenjin export is
-    cumulative (an "August" export re-lists every receipt back to
-    whenever records began, not just August's) - when annotate_aor_file
-    is given the upload it's regenerating the new sheets for (see
-    /download-aor-annotated/<id>), an old month's already-processed
-    receipt must not show up again just because a later, wider export
-    happens to repeat it.
+    Regression test: the real Kenjin export is cumulative (an "August"
+    export re-lists every receipt back to whenever records began, not
+    just August's), so a receipt sitting in THIS file may already have
+    been recorded in aor_receipts by an earlier overlapping upload.
+    annotate_aor_file must show it anyway - it's a faithful cross-
+    reference against the file you're looking at right now, not a "what's
+    new since last time" report. (An earlier version scoped this to only
+    the receipts the current upload itself introduced, which silently
+    hid rows that were plainly sitting in the file - exactly what a
+    real user hit: a receipt already recorded back in June disappeared
+    from August's own annotated copy.)
     """
     db_path = _db_path(tmp_path)
     xlsx_master = tmp_path / "master.xlsx"
-    build_master_report(xlsx_master, [
-        {"No": 1, "PO No": 80005, "Customer ID": "CUSTA5", "Customer Name": "Customer A5",
-         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
-        {"No": 2, "PO No": 80006, "Customer ID": "CUSTA6", "Customer Name": "Customer A6",
-         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
-    ])
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80005, "Customer ID": "CUSTA5", "Customer Name": "Customer A5",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1),
+    }])
     process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
 
     june_row = {
@@ -197,125 +199,28 @@ def test_annotate_aor_file_scoped_to_upload_excludes_an_earlier_uploads_receipts
     process_aor_upload(db_path, str(xlsx_june), run_date=datetime.date(2026, 6, 17))
 
     # August's export is cumulative - it repeats June's receipt
-    # unchanged AND adds a genuinely new one of its own.
-    august_row = {
-        "No": 2, "Acknowledgment Receipt No": "RC-TEST-AUG01",
-        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
-        "PO No": 80006, "Customer ID": "CUSTA6", "Customer Name": "Customer A6",
-        "Reference No": "TRF 10/08/2026 (INST 01/24)",
-    }
+    # unchanged, so importing it records zero new receipts...
     xlsx_august = tmp_path / "august.xlsx"
-    build_aor_report(xlsx_august, [june_row, august_row])
+    build_aor_report(xlsx_august, [june_row])
     result_august = process_aor_upload(db_path, str(xlsx_august), run_date=datetime.date(2026, 8, 17))
-    assert result_august["import_result"].receipts_imported == 1  # only August's own new receipt
+    assert result_august["import_result"].receipts_imported == 0  # already recorded back in June
 
+    # ...but the receipt is still plainly sitting in August's own file,
+    # and its PO was purchased in January - well inside the range asked
+    # for below - so it must still show up here.
     conn = get_connection(db_path)
     output_path = tmp_path / "annotated_august.xlsx"
-    annotate_aor_file(
-        str(xlsx_august), str(output_path), conn, "2026-01-01", "2026-12-31",
-        aor_upload_id=result_august["aor_upload_id"],
-    )
+    annotate_aor_file(str(xlsx_august), str(output_path), conn, "2026-01-01", "2026-12-31")
     conn.close()
 
     rows = _valid_rows(openpyxl.load_workbook(output_path))
-    assert [r[0] for r in rows] == ["TRF 10/08/2026 (INST 01/24)"]  # not June's repeated row
-
-
-def test_annotate_aor_file_falls_back_to_unscoped_for_an_upload_predating_the_link(tmp_path):
-    """
-    Regression test: an aor_uploads row created before aor_upload_id
-    existed on aor_receipts has no receipts linked to it at all (every
-    one of them is orphaned, not genuinely empty) - scoping to that
-    empty set would turn re-downloading an old upload's annotated copy
-    into a blank sheet the moment this feature ships. Falls back to the
-    old unscoped behavior instead.
-    """
-    db_path = _db_path(tmp_path)
-    xlsx_master = tmp_path / "master.xlsx"
-    build_master_report(xlsx_master, [{
-        "No": 1, "PO No": 80007, "Customer ID": "CUSTA7", "Customer Name": "Customer A7",
-        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1),
-    }])
-    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
-
-    xlsx_aor = tmp_path / "aor.xlsx"
-    build_aor_report(xlsx_aor, [{
-        "No": 1, "Acknowledgment Receipt No": "RC-TEST-OLD01",
-        "Acknowledgment Receipt Date": datetime.date(2026, 6, 10),
-        "PO No": 80007, "Customer ID": "CUSTA7", "Customer Name": "Customer A7",
-        "Reference No": "TRF 10/06/2026 (INST 01/24)",
-    }])
-    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 6, 17))
-
-    conn = get_connection(db_path)
-    # Simulates a pre-migration upload: its receipt exists, but with no
-    # link to the upload that (really did) introduce it.
-    conn.execute("UPDATE aor_receipts SET aor_upload_id = NULL")
-    conn.commit()
-
-    output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(
-        str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31",
-        aor_upload_id=result["aor_upload_id"],
-    )
-    conn.close()
-
-    rows = _valid_rows(openpyxl.load_workbook(output_path))
-    assert [r[0] for r in rows] == ["TRF 10/06/2026 (INST 01/24)"]  # shown, not hidden
-
-
-def test_annotate_aor_file_shows_an_empty_filtered_sheet_when_the_period_genuinely_matched_nothing(tmp_path):
-    """
-    Regression test: an upload where every receipt fell outside the
-    chosen period (so zero receipts get linked to it - not because
-    aor_upload_id predates the column, but because the period genuinely
-    excluded everything in the file) used to trip the same "fall back
-    to unscoped" logic as a real pre-migration upload, dumping every
-    trigger-shaped row anywhere in the file - including whatever other
-    months a real cumulative Kenjin export repeats - into the new
-    sheets instead of correctly showing nothing. aor_uploads.period_start being
-    recorded (this upload DID go through period-aware code) is what
-    tells the two cases apart now.
-    """
-    db_path = _db_path(tmp_path)
-    xlsx_master = tmp_path / "master.xlsx"
-    build_master_report(xlsx_master, [{
-        "No": 1, "PO No": 80008, "Customer ID": "CUSTA8", "Customer Name": "Customer A8",
-        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 6, 1),
-    }])
-    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
-
-    xlsx_aor = tmp_path / "aor.xlsx"
-    build_aor_report(xlsx_aor, [{
-        "No": 1, "Acknowledgment Receipt No": "RC-TEST-OUT01",
-        "Acknowledgment Receipt Date": datetime.date(2026, 6, 10),  # outside the chosen period below
-        "PO No": 80008, "Customer ID": "CUSTA8", "Customer Name": "Customer A8",
-        "Reference No": "TRF 10/06/2026 (INST 01/24)",
-    }])
-    result = process_aor_upload(
-        db_path, str(xlsx_aor), run_date=datetime.date(2026, 3, 17),
-        period_start="2026-03-01", period_end="2026-03-31",
-    )
-
-    conn = get_connection(db_path)
-    output_path = tmp_path / "annotated.xlsx"
-    # A wide-open PO-date range on purpose - if the fallback-to-unscoped
-    # bug reappeared, June's receipt (whose PO Date is well inside this
-    # range) would show up here; it must not.
-    annotate_aor_file(
-        str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31",
-        aor_upload_id=result["aor_upload_id"],
-    )
-    conn.close()
-
-    rows = _valid_rows(openpyxl.load_workbook(output_path))
-    assert rows == []  # genuinely nothing matched March - not a fallback dump of June's receipt
+    assert [r[0] for r in rows] == ["TRF 10/06/2026 (INST 01/24)"]
 
 
 def test_annotate_aor_file_with_no_upload_id_still_shows_everything_in_the_file(tmp_path):
-    """The aor_upload_id scoping is opt-in - a caller that doesn't pass
-    it keeps seeing every receipt in the file (still narrowed by the
-    required PO-date range, which is a different axis entirely)."""
+    """Narrowed only by the required PO-date range - never by which
+    upload happened to record a receipt first (see the sibling test
+    above)."""
     db_path = _db_path(tmp_path)
     xlsx_master = tmp_path / "master.xlsx"
     build_master_report(xlsx_master, [{

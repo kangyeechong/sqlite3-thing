@@ -205,14 +205,13 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
 
     aor_upload_id: the aor_uploads row this call is processing on
     behalf of (see app.pipeline.process_aor_upload), stamped onto
-    every aor_receipts row this call writes. Optional - None for a
-    caller that has no aor_uploads row yet (e.g. a script or test
-    calling this directly) - it's only used later to scope
-    annotate_aor_file's new "Payments (PO Date)"/"Valid Payments (PO
-    Date)" sheets to one specific upload's own newly-introduced
-    receipts, never for the transfer logic above,
-    which is already correctly scoped via aor_receipts' own
-    UNIQUE(acknowledgment_receipt_no).
+    every aor_receipts row this call writes purely as a record of which
+    upload first introduced each receipt - never consulted to decide
+    what gets imported or shown anywhere (that's already correctly
+    scoped via aor_receipts' own UNIQUE(acknowledgment_receipt_no) for
+    imports, and by reading the file directly for annotate_aor_file).
+    Optional - None for a caller that has no aor_uploads row yet (e.g.
+    a script or test calling this directly).
 
     period_start/period_end: ISO date strings (both required together,
     or both left None). The real Kenjin AOR export is never cut on
@@ -375,7 +374,7 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     return result
 
 
-def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end, aor_upload_id=None):
+def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end):
     """
     Writes a copy of the AOR export to `output` (a path or a file-like
     object) - every original sheet left exactly as uploaded (a genuine
@@ -412,56 +411,26 @@ def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end, a
     ...) rather than the file's own row order, so a PO's group of rows
     sits together and each sheet reads top to bottom in order.
 
+    Deliberately NOT scoped to "only the receipts this specific upload
+    newly introduced" - every row that's actually in this file and
+    matches the PO-date range shows up, full stop, even if that exact
+    receipt was already recorded by an earlier overlapping upload (the
+    real Kenjin export is cumulative - an "August" export re-lists
+    every receipt back to whenever records began). This sheet's whole
+    point is being a faithful cross-reference against the file you're
+    looking at right now - hiding a row that's plainly sitting in the
+    file just because some earlier upload happened to see it first
+    would defeat that.
+
     Reads the uploaded file twice on purpose: once with data_only=True
     to classify rows and pull out values (the same read every other
     function in this module uses), and once completely untouched to
     build the original sheet(s) from - so a cell that happens to hold
     a formula in the original file is never silently flattened to its
     cached value just because this function also had to read it.
-
-    aor_upload_id: optional - when given (with conn, always required),
-    both new sheets are ALSO scoped to only the receipts THIS SPECIFIC
-    upload actually introduced (via aor_receipts.aor_upload_id,
-    stamped at import time - see import_aor_report), on top of the
-    PO-date scoping above. Staff process month by month, but the real
-    Kenjin export is cumulative (an "August" export re-lists every
-    receipt back to whenever records began), so without this, an old
-    upload's receipts would show up as if newly relevant every time a
-    later cumulative export gets annotated.
     """
     values_workbook = openpyxl.load_workbook(file_path, data_only=True)
     aor_sheets = [sheet for sheet in values_workbook.worksheets if _is_aor_shaped(sheet)]
-
-    this_upload_receipts = None
-    if aor_upload_id is not None:
-        this_upload_receipts = {
-            row["acknowledgment_receipt_no"] for row in conn.execute(
-                "SELECT acknowledgment_receipt_no FROM aor_receipts WHERE aor_upload_id = ?",
-                (aor_upload_id,),
-            )
-        }
-        if not this_upload_receipts:
-            # Zero linked receipts is genuinely ambiguous on its own -
-            # it means either "this upload predates aor_upload_id ever
-            # existing" (no receipt of its could ever have been
-            # stamped) or "this upload went through period filtering
-            # and genuinely matched nothing in its own chosen period"
-            # (every row fell outside it, so nothing got recorded) -
-            # and those need OPPOSITE handling. Falling back to
-            # unscoped for the second case doesn't produce an empty
-            # sheet the way the first case's fallback intends - it
-            # dumps every trigger-shaped row anywhere in this file,
-            # including whatever other months a real cumulative Kenjin
-            # export repeats. aor_uploads.period_start disambiguates
-            # them directly: recorded means this upload DID go through
-            # period-aware code, so trust the empty result; NULL means
-            # it predates that column ever existing, so fall back
-            # exactly as before.
-            went_through_period_filtering = conn.execute(
-                "SELECT period_start FROM aor_uploads WHERE id = ?", (aor_upload_id,),
-            ).fetchone()
-            if went_through_period_filtering is None or went_through_period_filtering["period_start"] is None:
-                this_upload_receipts = None
 
     # First pass: which POs have a full-payment completion anywhere in
     # this file, so every receipt row for that PO (not just the
@@ -513,9 +482,6 @@ def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end, a
         if headers is None:
             headers = sheet_headers
         for raw_row in _read_aor_rows(sheet):
-            if this_upload_receipts is not None:
-                if raw_row.get("Acknowledgment Receipt No") not in this_upload_receipts:
-                    continue
             po_no = raw_row.get("PO No")
             po_date = po_dates_by_po_no.get(int(po_no)) if _is_positive_whole_number(po_no) else None
             if po_date is None or not (po_period_start <= po_date <= po_period_end):

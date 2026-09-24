@@ -216,13 +216,12 @@ CREATE TABLE IF NOT EXISTS historical_summary_rows (
 -- yet is still recorded as seen (so it's never silently reprocessed
 -- once the PO does show up) but has nothing to attach a paid-date to.
 -- aor_upload_id is nullable too (and NULL for every row written before
--- this column existed): it's what lets annotate_aor_file scope its new
--- "Payments (PO Date)"/"Valid Payments (PO Date)" sheets to only the
--- receipts THIS SPECIFIC upload actually introduced, so a later
--- cumulative export that repeats earlier
--- months' receipts doesn't show them as if newly relevant again - see
--- the migration and app/aor.py's annotate_aor_file for the full
--- reasoning.
+-- this column existed): purely a record of which upload first
+-- introduced each receipt, not consulted by anything to decide what
+-- gets shown - annotate_aor_file reads the uploaded file directly, so
+-- a receipt already recorded by an earlier overlapping upload still
+-- shows up in a later file's own annotated copy, exactly as it
+-- genuinely appears in that file.
 -- receipt_date/reference_text/payment_received/trigger_type (added
 -- after the columns above, all nullable - NULL for every row written
 -- before this existed) persist enough about each receipt to build an

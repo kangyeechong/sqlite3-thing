@@ -242,15 +242,15 @@ def download_aor_annotated(upload_id):
                 f.write(upload_row["file_bytes"])
 
             buffer = io.BytesIO()
-            # Scoped to this upload's own receipts (see
-            # annotate_aor_file's aor_upload_id param) - a cumulative
-            # re-export re-lists earlier months' receipts too, and
-            # staff process month by month, so the new sheets
-            # shouldn't show an old upload's rows as if newly relevant
-            # again.
-            annotate_aor_file(
-                saved_path, buffer, conn, po_period_start, po_period_end, aor_upload_id=upload_id,
-            )
+            # saved_path is THIS upload's own saved bytes, so the new
+            # sheets are already naturally scoped to this one file -
+            # every row that's actually in it and matches the PO-date
+            # range shows up, regardless of whether an earlier upload
+            # happened to see that same receipt first (the real Kenjin
+            # export is cumulative and re-lists earlier months'
+            # receipts too, but this is a faithful cross-reference
+            # against the file itself, not "what's new").
+            annotate_aor_file(saved_path, buffer, conn, po_period_start, po_period_end)
     finally:
         conn.close()
 
