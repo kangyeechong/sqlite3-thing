@@ -512,9 +512,11 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
     output_workbook.save(output)
 
 
-def build_period_audit_workbook(conn, period_start, period_end, output):
+def build_period_audit_workbook(
+    conn, period_start, period_end, output, po_period_start=None, po_period_end=None,
+):
     """
-    Writes a two-table audit workbook for a chosen period (ISO date
+    Writes an audit workbook for a chosen receipt period (ISO date
     strings, inclusive both ends) - built purely from aor_receipts, so
     it naturally spans however many AOR uploads/files actually cover
     that period, not just one. Answers "let me check every payment for
@@ -532,6 +534,20 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
         app.aor._classify_reference). This is "the ones we actually
         want to put into Overall Commission."
 
+    po_period_start/po_period_end (both required together, or both left
+    None): adds two more sheets, narrowing "All Receipts" down further
+    by the PO's own PURCHASE date - a genuinely different axis from the
+    receipt period above (confirmed live: payments received in
+    September routinely settle POs purchased back in March, and the
+    two date ranges are never the same). Answers "of everything that
+    came in this receipt period, which of it is actually March's own
+    business":
+      - "Payments by PO Date": All Receipts further filtered to just
+        the POs purchased in this range.
+      - "Valid Payments by PO Date": that same subset, narrowed to just
+        the valid/triggering ones - "March's payments that are actually
+        going into March's Overall Commission report."
+
     Deliberately reads persisted aor_receipts state, not the original
     uploaded files - a receipt's classification was already decided at
     import time (see import_aor_report), so this never re-parses or
@@ -544,7 +560,8 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
     it came from the Master report. A receipt with no po_no at all (no
     valid PO No on that row - see import_aor_report), or a po_no not
     yet in the ledger, simply shows blank for all of these rather than
-    failing.
+    failing - and is naturally excluded from the two PO-date-scoped
+    sheets, since there's no PO Date to filter by either.
 
     Colored the same way annotate_aor_file's "Filtered" sheet already
     is (yellow for installment 1/6, green for a full payment) - same
@@ -558,6 +575,7 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
     columns = (
         ("Acknowledgment Receipt No", "acknowledgment_receipt_no"),
         ("PO No", "po_no"),
+        ("PO Date", "po_date"),
         ("Customer ID", "customer_id"),
         ("Customer Name", "customer_name"),
         ("Lot No", "lot_no"),
@@ -574,7 +592,8 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
         """
         SELECT r.acknowledgment_receipt_no, r.po_no, r.receipt_date, r.reference_text,
                r.payment_received, r.trigger_type, r.source_filename,
-               c.customer_id, cu.name AS customer_name, c.lot_no, c.agency_code, c.agent_name
+               c.customer_id, cu.name AS customer_name, c.lot_no, c.agency_code, c.agent_name,
+               c.po_date
         FROM aor_receipts r
         LEFT JOIN contracts c ON c.po_no = r.po_no
         LEFT JOIN customers cu ON cu.customer_id = c.customer_id
@@ -616,5 +635,17 @@ def build_period_audit_workbook(conn, period_start, period_end, output):
 
     valid_sheet = workbook.create_sheet("Valid Payments")
     _write_sheet(valid_sheet, valid_payments)
+
+    if po_period_start is not None:
+        po_scoped = [
+            r for r in all_receipts
+            if r["po_date"] is not None and po_period_start <= r["po_date"] <= po_period_end
+        ]
+        po_scoped_sheet = workbook.create_sheet("Payments by PO Date")
+        _write_sheet(po_scoped_sheet, po_scoped)
+
+        po_scoped_valid = [r for r in po_scoped if r["trigger_type"]]
+        po_scoped_valid_sheet = workbook.create_sheet("Valid Payments by PO Date")
+        _write_sheet(po_scoped_valid_sheet, po_scoped_valid)
 
     workbook.save(output)

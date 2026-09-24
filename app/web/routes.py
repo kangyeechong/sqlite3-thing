@@ -265,6 +265,13 @@ def download_aor_period():
     to one specific upload the way the annotated-copy download is.
     A plain GET with query params, not a form post: this only reads
     already-persisted state, nothing is uploaded or changed.
+
+    po_period_start/po_period_end: optional, both required together -
+    adds two more sheets narrowing everything down further by the PO's
+    own purchase date, a genuinely different axis from the receipt
+    period above (payments received in September routinely settle POs
+    purchased back in March). Left blank, this behaves exactly as
+    before - just the two receipt-period sheets.
     """
     period_start = (request.args.get("period_start") or "").strip()
     period_end = (request.args.get("period_end") or "").strip()
@@ -273,10 +280,20 @@ def download_aor_period():
     if period_start > period_end:
         abort(400, description="period_start must not be after period_end.")
 
+    po_period_start = (request.args.get("po_period_start") or "").strip() or None
+    po_period_end = (request.args.get("po_period_end") or "").strip() or None
+    if (po_period_start is None) != (po_period_end is None):
+        abort(400, description="po_period_start and po_period_end must both be given, or both left blank.")
+    if po_period_start is not None and po_period_start > po_period_end:
+        abort(400, description="po_period_start must not be after po_period_end.")
+
     conn = get_connection(current_app.config["DB_PATH"])
     try:
         buffer = io.BytesIO()
-        build_period_audit_workbook(conn, period_start, period_end, buffer)
+        build_period_audit_workbook(
+            conn, period_start, period_end, buffer,
+            po_period_start=po_period_start, po_period_end=po_period_end,
+        )
     finally:
         conn.close()
 

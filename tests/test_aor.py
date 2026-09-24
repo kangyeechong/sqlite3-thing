@@ -784,7 +784,7 @@ def test_annotate_aor_file_sorts_by_po_no_ascending(tmp_path):
     assert po_nos == [20260299, 20260299, 20260300]
 
 
-def _sheet_rows(workbook, sheet_name, headers=("Acknowledgment Receipt No", "PO No", "Customer ID",
+def _sheet_rows(workbook, sheet_name, headers=("Acknowledgment Receipt No", "PO No", "PO Date", "Customer ID",
                                                  "Customer Name", "Lot No", "Agency Code", "Agent Name",
                                                  "Receipt Date", "Reference No", "Payment Received (RM)",
                                                  "Trigger Type", "Source File")):
@@ -903,3 +903,83 @@ def test_period_audit_workbook_separates_non_triggering_and_unmatched_receipts(t
     assert {r["Acknowledgment Receipt No"] for r in all_rows} == {"RC-AUDIT-DEPOSIT", "RC-AUDIT-UNMATCHED"}
     valid_rows = _sheet_rows(workbook, "Valid Payments")
     assert valid_rows == []  # neither one counts: one's non-triggering, the other has no matching PO
+
+
+def test_period_audit_workbook_without_po_period_only_has_two_sheets(tmp_path):
+    """po_period_start/po_period_end are optional - leaving them out
+    must behave exactly as before this feature existed, no extra
+    sheets at all."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80090, "Customer ID": "CUSTP4", "Customer Name": "Customer P4", "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    conn = get_connection(db_path)
+    output_path = tmp_path / "audit.xlsx"
+    build_period_audit_workbook(conn, "2026-08-01", "2026-08-31", str(output_path))
+    conn.close()
+
+    workbook = openpyxl.load_workbook(output_path)
+    assert workbook.sheetnames == ["All Receipts", "Valid Payments"]
+
+
+def test_period_audit_workbook_narrows_by_po_purchase_date_too(tmp_path):
+    """
+    The actual real-world scenario: payments received in September for
+    POs purchased back in March. Both March's and April's POs get paid
+    in the same September receipt window, but the PO-date-scoped
+    sheets must only ever show March's own POs - a genuinely different
+    axis from the receipt period, not the same date range reused.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [
+        {"No": 1, "PO No": 80091, "Customer ID": "CUSTP5", "Customer Name": "Customer P5",
+         "PO Date": datetime.date(2026, 3, 10), "Agency Code": "AC001"},
+        {"No": 2, "PO No": 80092, "Customer ID": "CUSTP6", "Customer Name": "Customer P6",
+         "PO Date": datetime.date(2026, 4, 10), "Agency Code": "AC001"},
+    ])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-MARCH-PO",
+            "Acknowledgment Receipt Date": datetime.date(2026, 9, 5),
+            "PO No": 80091, "Customer ID": "CUSTP5", "Customer Name": "Customer P5",
+            "Reference No": "TRF (INST 06/24)",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-APRIL-PO",
+            "Acknowledgment Receipt Date": datetime.date(2026, 9, 6),
+            "PO No": 80092, "Customer ID": "CUSTP6", "Customer Name": "Customer P6",
+            "Reference No": "TRF (INST 06/24)",
+        },
+    ])
+    process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 9, 20),
+                        period_start="2026-09-01", period_end="2026-09-30")
+
+    conn = get_connection(db_path)
+    output_path = tmp_path / "audit.xlsx"
+    build_period_audit_workbook(
+        conn, "2026-09-01", "2026-09-30", str(output_path),
+        po_period_start="2026-03-01", po_period_end="2026-03-31",
+    )
+    conn.close()
+
+    workbook = openpyxl.load_workbook(output_path)
+    assert workbook.sheetnames == [
+        "All Receipts", "Valid Payments", "Payments by PO Date", "Valid Payments by PO Date",
+    ]
+
+    all_rows = _sheet_rows(workbook, "All Receipts")
+    assert {r["Acknowledgment Receipt No"] for r in all_rows} == {"RC-MARCH-PO", "RC-APRIL-PO"}
+
+    po_scoped_rows = _sheet_rows(workbook, "Payments by PO Date")
+    assert {r["Acknowledgment Receipt No"] for r in po_scoped_rows} == {"RC-MARCH-PO"}
+    assert po_scoped_rows[0]["PO Date"] == "2026-03-10"
+
+    po_scoped_valid_rows = _sheet_rows(workbook, "Valid Payments by PO Date")
+    assert {r["Acknowledgment Receipt No"] for r in po_scoped_valid_rows} == {"RC-MARCH-PO"}

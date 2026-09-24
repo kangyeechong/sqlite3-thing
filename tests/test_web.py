@@ -634,3 +634,52 @@ def test_download_aor_annotated_404s_for_an_unknown_run(client):
     _login(client)
     response = client.get("/download-aor-annotated/999999")
     assert response.status_code == 404
+
+
+def test_download_aor_period_with_po_period_includes_extra_sheets(client, tmp_path):
+    """The optional po_period_start/po_period_end query params add the
+    two extra PO-date-scoped sheets - web-layer plumbing test for
+    app.aor.build_period_audit_workbook's own feature."""
+    _login(client)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80095, "Customer ID": "CUSTWEB9", "Customer Name": "Web Test 9",
+        "PO Date": datetime.date(2026, 3, 10), "Agency Code": "AC001",
+    }])
+    _upload(client, xlsx_master)
+
+    response = client.get(
+        "/download-aor-period",
+        query_string={
+            "period_start": "2026-09-01", "period_end": "2026-09-30",
+            "po_period_start": "2026-03-01", "po_period_end": "2026-03-31",
+        },
+    )
+    assert response.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(response.data))
+    assert workbook.sheetnames == [
+        "All Receipts", "Valid Payments", "Payments by PO Date", "Valid Payments by PO Date",
+    ]
+
+
+def test_download_aor_period_without_po_period_has_only_two_sheets(client, tmp_path):
+    _login(client)
+    response = client.get(
+        "/download-aor-period",
+        query_string={"period_start": "2026-09-01", "period_end": "2026-09-30"},
+    )
+    assert response.status_code == 200
+    workbook = openpyxl.load_workbook(io.BytesIO(response.data))
+    assert workbook.sheetnames == ["All Receipts", "Valid Payments"]
+
+
+def test_download_aor_period_rejects_a_lone_po_period_start(client):
+    _login(client)
+    response = client.get(
+        "/download-aor-period",
+        query_string={
+            "period_start": "2026-09-01", "period_end": "2026-09-30",
+            "po_period_start": "2026-03-01",  # po_period_end missing
+        },
+    )
+    assert response.status_code == 400
