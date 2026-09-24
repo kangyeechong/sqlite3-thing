@@ -760,18 +760,15 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None, period_start=No
             # group's own combined sheet; otherwise 0 and unused.
             "agent_commission": agent_commission,
             "fb_lead_deduction": fb_lead_deduction,
-            # NOT running_total - agent_commission - fb_lead_deduction:
-            # running_total is already built from the combined `amount`
-            # column, which already has the FB-lead deduction baked in
-            # (agency_amount is computed post-deduction - see
-            # commission.calculate_agency_agent_split and the schema
-            # comment on commission_events.agency_amount). Subtracting
-            # fb_lead_deduction again here would deduct it a second
-            # time. fb_lead_deduction is shown purely as an informational
-            # breakdown of how much of the reduction already reflected
-            # in running_total was FB-lead-related, not a further
-            # subtraction to apply.
-            "total_for_group": round(running_total - agent_commission, 2),
+            # running_total is built from the combined `amount` column,
+            # which is always the flat, undeducted total (see
+            # commission._build_event) - the FB-lead deduction only
+            # ever reduces agency_amount, never `amount`. So the
+            # agency's own actual net take here needs both agent_
+            # commission AND fb_lead_deduction subtracted from running_
+            # total, or this would overstate what the agency keeps by
+            # exactly the deducted amount.
+            "total_for_group": round(running_total - agent_commission - fb_lead_deduction, 2),
             "remarks": remarks,
         })
     return summary_rows
@@ -1225,9 +1222,9 @@ def _write_summary_table(sheet, summary_rows, start_row, current_run_id, split_g
         if split_group_name is not None:
             final_agent_commission = round(sum(row["agent_commission"] for row in summary_rows), 2)
             final_fb_lead_deduction = round(sum(row["fb_lead_deduction"] for row in summary_rows), 2)
-            # Not minus final_fb_lead_deduction too - see the matching
+            # Also minus final_fb_lead_deduction - see the matching
             # comment on total_for_group above.
-            final_total_for_group = round(final_running_total - final_agent_commission, 2)
+            final_total_for_group = round(final_running_total - final_agent_commission - final_fb_lead_deduction, 2)
             for col, value in ((6, final_agent_commission), (7, final_fb_lead_deduction), (8, final_total_for_group)):
                 cell = sheet.cell(row=row_num, column=col, value=value)
                 cell.font = _HEADER_FONT

@@ -92,7 +92,7 @@ def test_full_payment_split_via_full_pipeline(tmp_path):
     assert row["amount"] == 3000.00
 
 
-def test_fb_lead_flag_on_contract_applies_the_deduction_at_calculation_time(tmp_path):
+def test_fb_lead_flag_does_not_reduce_the_overall_commission_amount(tmp_path):
     today = datetime.date.today()
     settlement_date = today - datetime.timedelta(days=6)
 
@@ -124,10 +124,15 @@ def test_fb_lead_flag_on_contract_applies_the_deduction_at_calculation_time(tmp_
     result = process_upload(db_path, str(xlsx_path), run_date=today)
 
     event = result["raised_events"][0]
-    # Agency 7% - 3% deduction = 4% of 20000 = 800.00; agent unaffected at 1600.00
+    # Agency 7% - 3% deduction = 4% of 20000 = 800.00; agent unaffected at 1600.00 -
+    # but the overall `amount` stays the full flat 15% = 3000.00, matching every
+    # other agency and every other report. The deduction is purely an AW
+    # Consultancy-internal bookkeeping detail (how this same total divides
+    # between agency and agent), confirmed with the business: it must never
+    # shrink the overall commission shown on Overall Commission by period.
     assert event["agency_amount"] == 800.00
     assert event["agent_amount"] == 1600.00
-    assert event["amount"] == 2400.00
+    assert event["amount"] == 3000.00
 
 
 def _find_table_rows(sheet, header_marker="PO No"):

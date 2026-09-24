@@ -144,17 +144,21 @@ CREATE TABLE IF NOT EXISTS commission_events (
     po_no              INTEGER NOT NULL REFERENCES contracts(po_no),
     trigger_type       TEXT NOT NULL CHECK (trigger_type IN ('full_payment', 'installment_1', 'installment_6')),
     trigger_date       TEXT NOT NULL,
-    -- The total commission this trigger released. For a 'flat' agency
-    -- this is the whole payout. For an 'agency_agent_split' agency,
-    -- this still equals agency_amount + agent_amount (the FB-lead
-    -- deduction reduces the total, not just the agency's share) - so
-    -- every existing sum/total/report that only reads `amount` keeps
-    -- working unchanged for both agency types.
+    -- The total commission this trigger released - always the flat
+    -- company-wide percentage of Net Price (see commission._build_
+    -- event), for BOTH a 'flat' agency and an 'agency_agent_split' one
+    -- (AW Consultancy). The FB-lead deduction never touches this
+    -- figure - it's an internal AW Consultancy bookkeeping detail
+    -- (how this SAME total divides between agency and agent), applied
+    -- only to agency_amount below. So for an FB-lead-referred AW
+    -- Consultancy sale, agency_amount + agent_amount is LESS than
+    -- `amount` by exactly the deduction - that's expected, not a bug.
     amount             NUMERIC NOT NULL,
     -- Only populated for 'agency_agent_split' agencies; NULL for
     -- 'flat' ones. agency_amount already has any FB-lead deduction
     -- applied - it is the actual amount payable to the agency, not
-    -- the pre-deduction figure.
+    -- the pre-deduction figure. See the comment on `amount` above for
+    -- why agency_amount + agent_amount can be less than `amount`.
     agency_amount      NUMERIC,
     agent_amount       NUMERIC,
     detected_at        TEXT NOT NULL,

@@ -176,16 +176,25 @@ _TRIGGER_RULES = {
 def _build_event(contract, trigger_type, trigger_date):
     """
     Computes one commission_event dict for a trigger already confirmed
-    due. Branches on the contract's agency's commission_split_type -
-    'flat' (the default, one figure) vs 'agency_agent_split' (AW
-    Consultancy - two figures, with the manual FB-lead deduction
-    applied to the agency's share only).
+    due. `amount` is always the flat company-wide percentage of Net
+    Price (matching every other report and every non-split agency) -
+    the FB-lead deduction never touches it. Branches only on the
+    contract's agency's commission_split_type for agency_amount/
+    agent_amount: 'flat' (the default) leaves both None; 'agency_agent_
+    split' (AW Consultancy) computes the two figures with the manual
+    FB-lead deduction applied to the agency's share only. Confirmed
+    with the business: the deduction is purely an internal AW
+    Consultancy bookkeeping detail (how the SAME total splits between
+    agency and agent) - it must never shrink the overall commission
+    shown on Overall Commission by period or anywhere else that isn't
+    the AW Consultancy sheet's own split columns.
     """
     trigger_rules = _TRIGGER_RULES[trigger_type]
     net_price = contract["net_price"]
+    amount = _calculate_commission(net_price, trigger_rules["flat_pct"])
 
     if contract["commission_split_type"] == "agency_agent_split":
-        agency_amount, agent_amount, amount = calculate_agency_agent_split(
+        agency_amount, agent_amount, _ = calculate_agency_agent_split(
             net_price,
             trigger_rules["agency_pct"],
             trigger_rules["agent_pct"],
@@ -193,7 +202,6 @@ def _build_event(contract, trigger_type, trigger_date):
             trigger_rules["deduction_pct"],
         )
     else:
-        amount = _calculate_commission(net_price, trigger_rules["flat_pct"])
         agency_amount, agent_amount = None, None
 
     return {

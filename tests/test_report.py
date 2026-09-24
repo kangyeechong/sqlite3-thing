@@ -1283,15 +1283,16 @@ def test_aw_consultancy_group_summary_has_agent_and_fb_lead_breakdown_columns(tm
     reference table (RM12,397.50 / RM6,612.00 / RM0.00 / RM5,785.50).
 
     Also locks in the correct formula for "Total for {group}": Running
-    Total minus Agent Commission ONLY, not minus the FB-lead deduction
-    too - `amount` (what Running Total is built from) already has the
-    deduction baked into agency_amount (see
-    commission.calculate_agency_agent_split), so subtracting it again
-    here would double-deduct it. fb_lead_referred is a purely manual
-    flag (no Excel column), so this test sets it directly rather than
-    through an upload - the real file's own reference sample never
-    happened to include an FB-lead-referred row, so this is the only
-    way to catch the double-subtraction bug the real sample couldn't.
+    Total minus Agent Commission minus the FB-lead deduction too -
+    `amount` (what Running Total is built from) is always the flat,
+    undeducted total (see commission._build_event; the deduction only
+    ever reduces agency_amount, never `amount`), so it has to be
+    subtracted here separately to land on what the agency actually
+    keeps. fb_lead_referred is a purely manual flag (no Excel column),
+    so this test sets it directly rather than through an upload - the
+    real file's own reference sample never happened to include an
+    FB-lead-referred row, so this is the only way to catch a
+    subtraction bug the real sample couldn't.
     """
     import app.db.connection as db_connection
     from app import commission
@@ -1307,7 +1308,8 @@ def test_aw_consultancy_group_summary_has_agent_and_fb_lead_breakdown_columns(tm
         "INSERT INTO agencies (agency_code, splits_by_agent, commission_split_type, agency_group) "
         "VALUES ('AC108-01', 1, 'agency_agent_split', 'AW Consultancy')"
     )
-    # FB-lead-referred: agency 7% - 3% = 4% = 800, agent 8% = 1600, combined 2400
+    # FB-lead-referred: agency 7% - 3% = 4% = 800, agent 8% = 1600, but
+    # overall `amount` stays the full flat 15% = 3000 regardless
     conn.execute(
         "INSERT INTO contracts (po_no, agent_name, agency_code, net_price, case_type, status, "
         "full_settlement_paid_date, fb_lead_referred) VALUES (93010, 'Agent AW1', 'AC108-01', "
@@ -1347,13 +1349,13 @@ def test_aw_consultancy_group_summary_has_agent_and_fb_lead_breakdown_columns(tm
     ]
 
     data_row = sheet[header_row[0].row + 1]
-    assert data_row[4].value == 5400.0  # Running Total: 2400 + 3000
+    assert data_row[4].value == 6000.0  # Running Total: 3000 + 3000, always undeducted
     assert data_row[5].value == 3200.0  # Less Agent Commission: 1600 + 1600
     assert data_row[6].value == 600.0   # Less FB leads: 20000 * 3%, PO1 only
-    assert data_row[7].value == 2200.0  # Total for AW Consultancy: 5400 - 3200, NOT also - 600
+    assert data_row[7].value == 2200.0  # Total for AW Consultancy: 6000 - 3200 - 600
 
     total_row = sheet[header_row[0].row + 2]
-    assert total_row[4].value == 5400.0
+    assert total_row[4].value == 6000.0
     assert total_row[5].value == 3200.0
     assert total_row[6].value == 600.0
     assert total_row[7].value == 2200.0
