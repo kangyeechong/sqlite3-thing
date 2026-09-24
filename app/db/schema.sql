@@ -266,7 +266,18 @@ CREATE TABLE IF NOT EXISTS aor_uploads (
     commission_run_id  INTEGER REFERENCES commission_runs(id),
     filename           TEXT NOT NULL,
     file_bytes         BLOB NOT NULL,
-    uploaded_at        TEXT NOT NULL
+    uploaded_at        TEXT NOT NULL,
+    -- The period staff chose when uploading (see process_aor_upload) -
+    -- NULL only for an upload that predates period filtering ever
+    -- existing. annotate_aor_file uses NULL-ness here (not "zero
+    -- receipts ended up linked to this upload") to tell "this upload
+    -- never went through period-aware code at all, so an unscoped
+    -- Filtered sheet is the right fallback" apart from "this upload
+    -- genuinely matched nothing in its own chosen period, so an empty
+    -- Filtered sheet is the CORRECT answer" - those look identical by
+    -- receipt count alone but need opposite behavior.
+    period_start       TEXT,
+    period_end         TEXT
 );
 
 -- Marks which multi-statement migrations (see app/db/connection.py)

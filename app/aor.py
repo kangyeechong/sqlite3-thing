@@ -424,18 +424,29 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
             )
         }
         if not this_upload_receipts:
-            # Every receipt aor_upload_id was stamped on predates this
-            # column (added in a later migration - existing aor_uploads
-            # rows have no receipts linked to them at all, not zero on
-            # purpose) - falling back to unscoped rather than filtering
-            # to an empty set avoids turning an old upload's "download
-            # annotated copy" link into a blank Filtered sheet the
-            # moment this feature ships. A genuine upload that really
-            # did import zero receipts is a vanishing edge case next to
-            # that regression - and produces an equally empty Filtered
-            # sheet either way, since there'd be nothing left to show
-            # unscoped either.
-            this_upload_receipts = None
+            # Zero linked receipts is genuinely ambiguous on its own -
+            # it means either "this upload predates aor_upload_id ever
+            # existing" (no receipt of its could ever have been
+            # stamped) or "this upload went through period filtering
+            # and genuinely matched nothing in its own chosen period"
+            # (every row fell outside it, so nothing got recorded) -
+            # and those need OPPOSITE handling. Falling back to
+            # unscoped for the second case doesn't produce an empty
+            # sheet the way the first case's fallback intends - it
+            # dumps every trigger-shaped row anywhere in this file,
+            # including whatever other months a real cumulative Kenjin
+            # export repeats, right back into "Filtered" (found live:
+            # a period that genuinely matched nothing still showed a
+            # year's worth of unrelated dates). aor_uploads.period_start
+            # disambiguates them directly: recorded means this upload
+            # DID go through period-aware code, so trust the empty
+            # result; NULL means it predates that column ever existing,
+            # so fall back exactly as before.
+            went_through_period_filtering = conn.execute(
+                "SELECT period_start FROM aor_uploads WHERE id = ?", (aor_upload_id,),
+            ).fetchone()
+            if went_through_period_filtering is None or went_through_period_filtering["period_start"] is None:
+                this_upload_receipts = None
 
     # First pass: which POs have a full-payment completion anywhere in
     # this file, so every receipt row for that PO (not just the

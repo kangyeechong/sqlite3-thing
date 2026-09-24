@@ -96,6 +96,10 @@ _MIGRATIONS = [
      "ALTER TABLE commission_events ADD COLUMN voided_by_user TEXT", None),
     ("commission_events", "void_reason",
      "ALTER TABLE commission_events ADD COLUMN void_reason TEXT", None),
+    ("aor_uploads", "period_start",
+     "ALTER TABLE aor_uploads ADD COLUMN period_start TEXT", None),
+    ("aor_uploads", "period_end",
+     "ALTER TABLE aor_uploads ADD COLUMN period_end TEXT", None),
 ]
 
 # For a brand-new table (not a new column on an existing one) - same

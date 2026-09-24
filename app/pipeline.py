@@ -120,9 +120,12 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None,
         with open(file_path, "rb") as f:
             file_bytes = f.read()
         upload_cursor = conn.execute(
-            "INSERT INTO aor_uploads (commission_run_id, filename, file_bytes, uploaded_at) "
-            "VALUES (?, ?, ?, ?)",
-            (None, os.path.basename(file_path), file_bytes, datetime.datetime.now().isoformat()),
+            "INSERT INTO aor_uploads (commission_run_id, filename, file_bytes, uploaded_at, "
+            "period_start, period_end) VALUES (?, ?, ?, ?, ?, ?)",
+            (
+                None, os.path.basename(file_path), file_bytes, datetime.datetime.now().isoformat(),
+                period_start, period_end,
+            ),
         )
         aor_upload_id = upload_cursor.lastrowid
 

@@ -260,6 +260,48 @@ def test_annotate_aor_file_falls_back_to_unscoped_for_an_upload_predating_the_li
     assert [r[0] for r in rows] == ["TRF 10/06/2026 (INST 01/24)"]  # shown, not hidden
 
 
+def test_annotate_aor_file_shows_an_empty_filtered_sheet_when_the_period_genuinely_matched_nothing(tmp_path):
+    """
+    Regression test: an upload where every receipt fell outside the
+    chosen period (so zero receipts get linked to it - not because
+    aor_upload_id predates the column, but because the period genuinely
+    excluded everything in the file) used to trip the same "fall back
+    to unscoped" logic as a real pre-migration upload, dumping every
+    trigger-shaped row anywhere in the file - including whatever other
+    months a real cumulative Kenjin export repeats - into "Filtered"
+    instead of correctly showing nothing. aor_uploads.period_start being
+    recorded (this upload DID go through period-aware code) is what
+    tells the two cases apart now.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80008, "Customer ID": "CUSTA8", "Customer Name": "Customer A8",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-TEST-OUT01",
+        "Acknowledgment Receipt Date": datetime.date(2026, 6, 10),  # outside the chosen period below
+        "PO No": 80008, "Customer ID": "CUSTA8", "Customer Name": "Customer A8",
+        "Reference No": "TRF 10/06/2026 (INST 01/24)",
+    }])
+    result = process_aor_upload(
+        db_path, str(xlsx_aor), run_date=datetime.date(2026, 3, 17),
+        period_start="2026-03-01", period_end="2026-03-31",
+    )
+
+    conn = get_connection(db_path)
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path), conn=conn, aor_upload_id=result["aor_upload_id"])
+    conn.close()
+
+    rows = _filtered_rows(openpyxl.load_workbook(output_path))
+    assert rows == []  # genuinely nothing matched March - not a fallback dump of June's receipt
+
+
 def test_annotate_aor_file_with_no_upload_id_still_shows_everything_in_the_file(tmp_path):
     """The conn/aor_upload_id scoping is opt-in - a caller that doesn't
     pass them (matching every use of this function before this
