@@ -1820,3 +1820,171 @@ def test_period_report_includes_a_cancelled_po_gap_in_the_month_it_was_inferred_
     workbook = openpyxl.load_workbook(report_path)
     _headers, data_rows = _find_table_rows(workbook["All"])
     assert {row["PO No"] for row in data_rows} == {60040, 60041, 60042}
+
+
+def test_period_report_includes_historically_absorbed_commission_scoped_to_its_own_month(tmp_path):
+    """
+    The actual scenario this was built for: transitioning from manual
+    processing to this tool. A "March's Overall Commission" file
+    already has real payment history baked in (its own trailing Date
+    Record table, paid-dates filled in by hand) before it's ever
+    uploaded here - and that history must show up on MARCH's period
+    report specifically, not just on the unscoped standing report, or
+    "March's complete number" is permanently split across two
+    different downloads with no way to see it in one place.
+    """
+    cutoff = datetime.date(2026, 3, 18)
+    settlement_date = cutoff - datetime.timedelta(days=6)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 70020, "Customer ID": "CUSTP1", "Customer Name": "Customer P1",
+            "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00, already historically absorbed
+            "PO Date": datetime.date(2026, 3, 5),
+            "Signature Date": datetime.date(2026, 3, 5),
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 3, 25))
+    assert result["raised_events"] == []  # fully absorbed, nothing newly due
+
+    report_path = tmp_path / "march_report.xlsx"
+    generate_period_report_file(db_path, "2026-03-01", "2026-03-31", str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    all_sheet = workbook["All"]
+    headers, rows = _find_table_rows(all_sheet)
+    historical_row = next(r for r in rows if r["PO No"] == 70020)
+    assert historical_row["Full Payment Commission (RM)"] == 1500.0  # not blank
+
+    header_row_num = next(row[0].row for row in all_sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    po_col = headers.index("PO No") + 1
+    historical_row_num = header_row_num + [r["PO No"] for r in rows].index(70020) + 1
+    assert all_sheet.cell(row=historical_row_num, column=po_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
+
+    summary_cells = [row[0] for row in all_sheet.iter_rows(min_col=1, max_col=1)
+                      if row[0].value and isinstance(row[0].value, str)
+                      and row[0].value.startswith("As at")]
+    assert len(summary_cells) == 1
+    assert "18/03/2026" in summary_cells[0].value
+
+
+def test_period_report_does_not_leak_historical_money_into_a_different_month(tmp_path):
+    """
+    The flip side of the test above: a PO purchased in a DIFFERENT
+    month must not have its historically-absorbed commission show up
+    on some other month's period report just because both months share
+    the same global historical_summary_rows cutoffs.
+    """
+    cutoff = datetime.date(2026, 3, 18)
+    settlement_date = cutoff - datetime.timedelta(days=6)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 70030, "Customer ID": "CUSTP2", "Customer Name": "Customer P2",
+            "Niche/Tablet Price (RM)": 10000,
+            "PO Date": datetime.date(2026, 3, 5),
+            "Signature Date": datetime.date(2026, 3, 5),
+            "Full Settlement Paid Date": settlement_date,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 1500.0,
+            "first_half_commission": 0.0, "second_half_commission": 0.0,
+        }],
+    )
+    db_path = _db_path(tmp_path)
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 3, 25))
+
+    with pytest.raises(ValueError):
+        generate_period_report_file(db_path, "2026-04-01", "2026-04-30", str(tmp_path / "april_report.xlsx"))
+
+
+def test_period_report_combines_historical_money_with_a_fresh_confirmation(tmp_path):
+    """
+    The full real-world transition scenario: a March PO's 1st
+    installment was already paid and absorbed as history before this
+    tool existed, then its 6th installment gets confirmed for the
+    first time through the tool (standing in for AOR round 3+). Both
+    must show up together on March's own period report - the
+    historical figure plain (not yellow, it's old news), the freshly
+    confirmed one highlighted (it's what's new this round) - and the
+    Date Record summary must carry both an absorbed "As at" row and a
+    freshly confirmed one.
+    """
+    cutoff = datetime.date(2026, 3, 18)
+    first_installment_date = cutoff - datetime.timedelta(days=6)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(
+        xlsx_path,
+        [{
+            "No": 1, "PO No": 70050, "Customer ID": "CUSTP3", "Customer Name": "Customer P3",
+            "Niche/Tablet Price (RM)": 10000,  # 7.5% = 750.00 per installment
+            "PO Date": datetime.date(2026, 3, 5),
+            "Signature Date": datetime.date(2026, 3, 5),
+            "First Instalment Paid Date": first_installment_date,
+            "Agency Code": "AC001",
+        }],
+        historical_summary_rows=[{
+            "date_record": cutoff, "full_commission": 0.0,
+            "first_half_commission": 750.0, "second_half_commission": 0.0,
+        }],
+    )
+    db_path = _db_path(tmp_path)
+    result1 = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 3, 25))
+    assert result1["raised_events"] == []  # 1st installment fully absorbed
+
+    # Round 2 (standing in for a later AOR upload): the 6th installment
+    # gets paid and confirmed for the first time through the tool.
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 70050, "Customer ID": "CUSTP3", "Customer Name": "Customer P3",
+        "Niche/Tablet Price (RM)": 10000,
+        "PO Date": datetime.date(2026, 3, 5),
+        "Signature Date": datetime.date(2026, 3, 5),
+        "First Instalment Paid Date": first_installment_date,
+        "Sixth Instalment Paid Date": datetime.date(2026, 9, 10),
+        "Agency Code": "AC001",
+    }])
+    result2 = process_upload(db_path, str(xlsx2), run_date=datetime.date(2026, 9, 12))
+    assert {e["po_no"] for e in result2["raised_events"]} == {70050}
+    confirm_all_pending(db_path, result2["commission_run_id"])
+
+    report_path = tmp_path / "march_report.xlsx"
+    generate_period_report_file(db_path, "2026-03-01", "2026-03-31", str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    all_sheet = workbook["All"]
+    headers, rows = _find_table_rows(all_sheet)
+    row = next(r for r in rows if r["PO No"] == 70050)
+    assert row["1st Half Commission (RM)"] == 750.0  # historical, carried through
+    assert row["Balance Half Commission (RM)"] == 750.0  # freshly confirmed this round
+
+    header_row_num = next(r[0].row for r in all_sheet.iter_rows() if any(c.value == "PO No" for c in r))
+    first_half_col = headers.index("1st Half Commission (RM)") + 1
+    balance_half_col = headers.index("Balance Half Commission (RM)") + 1
+    row_num = header_row_num + [r["PO No"] for r in rows].index(70050) + 1
+    first_half_cell = all_sheet.cell(row=row_num, column=first_half_col)
+    balance_half_cell = all_sheet.cell(row=row_num, column=balance_half_col)
+    # The whole row shades green once Balance Half is confirmed (the
+    # PO is fully paid off) - that includes the historical 1st Half
+    # cell too, same convention as a same-run full+installment payoff.
+    # The freshly confirmed Balance Half cell still gets its own
+    # yellow highlight on top, since that check runs separately.
+    assert first_half_cell.fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
+    assert balance_half_cell.fill.start_color.rgb in ("00FFFF00", "FFFFFF00")  # fresh - yellow
+
+    summary_dates = [row[0].value for row in all_sheet.iter_rows(min_col=1, max_col=1)
+                      if row[0].value and isinstance(row[0].value, str) and row[0].value.startswith("As at")]
+    assert len(summary_dates) == 2
+    assert "18/03/2026" in summary_dates[0]  # historical round, carried
+    assert "12/09/2026" in summary_dates[1]  # fresh round, this period report

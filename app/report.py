@@ -230,10 +230,13 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
     month's own contracts). Every commission event ever confirmed for
     an in-period PO shows here, regardless of when it was confirmed -
     this is NOT limited to events confirmed within the period itself.
-    The pre-tool historical-absorption fallback (see the unscoped
-    branch below) is still skipped in this mode - by agreement, kept
-    simple rather than also reconstructing a per-month breakdown of
-    that lump-sum figure.
+    The pre-tool historical-absorption fallback below also applies in
+    this mode - by_po is already scoped to the period's own po_date
+    range at that point, so a historically-flagged trigger for an
+    in-period PO shows its reconstructed figure and green shading here
+    same as it always has on the unscoped report, instead of a March
+    PO's real, already-known payment history silently vanishing just
+    because it happened before this tool existed.
 
     latest_run_id: in period mode, which commission_run_id counts as
     "just confirmed" for the yellow-cell highlight - see
@@ -413,33 +416,32 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
     # Nothing here counts as newly confirmed: no confirmed_this_run
     # flag gets touched, so it never highlights yellow or contributes
     # to a "movement as at" figure.
-    # Skipped entirely in period mode - see this function's docstring:
-    # pre-tool historical-absorption money has no clean per-day date to
-    # filter by, so it never belongs in a period-scoped download.
-    if period_start is None:
-        has_event = {(e["po_no"], e["trigger_type"]) for e in conn.execute(
-            "SELECT DISTINCT po_no, trigger_type FROM commission_events"
-        )}
-        historical_fallback_triggers = (
-            ("full_payment", "full_commission_flagged", "full_payment_commission",
-             "full_payment_agency_amount", "full_payment_agent_amount"),
-            ("installment_1", "installment_1_commission_flagged", "installment_1_commission",
-             "installment_1_agency_amount", "installment_1_agent_amount"),
-            ("installment_6", "installment_6_commission_flagged", "installment_6_commission",
-             "installment_6_agency_amount", "installment_6_agent_amount"),
-        )
-        for row in by_po.values():
-            for trigger_type, flag_key, amount_key, agency_key, agent_key in historical_fallback_triggers:
-                if row[flag_key] and (row["po_no"], trigger_type) not in has_event:
-                    fallback = commission._build_event(row, trigger_type, trigger_date=None)
-                    row[amount_key] = fallback["amount"]
-                    row[agency_key] = fallback["agency_amount"]
-                    row[agent_key] = fallback["agent_amount"]
+    # Runs in period mode too - by_po is already scoped to the
+    # period's own po_date range (see the query above), so this only
+    # ever reconstructs figures for in-period POs regardless of mode.
+    has_event = {(e["po_no"], e["trigger_type"]) for e in conn.execute(
+        "SELECT DISTINCT po_no, trigger_type FROM commission_events"
+    )}
+    historical_fallback_triggers = (
+        ("full_payment", "full_commission_flagged", "full_payment_commission",
+         "full_payment_agency_amount", "full_payment_agent_amount"),
+        ("installment_1", "installment_1_commission_flagged", "installment_1_commission",
+         "installment_1_agency_amount", "installment_1_agent_amount"),
+        ("installment_6", "installment_6_commission_flagged", "installment_6_commission",
+         "installment_6_agency_amount", "installment_6_agent_amount"),
+    )
+    for row in by_po.values():
+        for trigger_type, flag_key, amount_key, agency_key, agent_key in historical_fallback_triggers:
+            if row[flag_key] and (row["po_no"], trigger_type) not in has_event:
+                fallback = commission._build_event(row, trigger_type, trigger_date=None)
+                row[amount_key] = fallback["amount"]
+                row[agency_key] = fallback["agency_amount"]
+                row[agent_key] = fallback["agent_amount"]
 
     return list(by_po.values())
 
 
-def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name):
+def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name, period_start=None, period_end=None):
     """
     The sheet's own pre-existing "Date Record" history has no
     per-agency or per-agent breakdown to read (the real file only ever
@@ -469,6 +471,14 @@ def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name):
     per-agent reference table (RM1,292.00 / RM772.00 / RM440.00 per
     cycle, RM2,504.00 total - exactly the agent's 8%/4% cut, not the
     combined 15%/7.5%).
+
+    period_start/period_end: also used by generate_period_report for
+    its "All" sheet, not just scoped ones - unlike historical_summary_rows
+    (one company-wide total per cutoff, with no per-PO breakdown to
+    filter by month), this function already works PO by PO, so a plain
+    po_date filter on the candidates query gives an exact per-period
+    breakdown for free, no separate schema needed to attribute a whole
+    file's history to whichever month it actually covers.
     """
     cutoffs = [r["date_record"] for r in conn.execute(
         "SELECT date_record FROM historical_summary_rows ORDER BY date_record"
@@ -476,14 +486,16 @@ def _reconstruct_scoped_historical_entries(conn, agency_group, agent_name):
     if not cutoffs:
         return []
 
+    period_clause = " AND c.po_date BETWEEN ? AND ?" if period_start is not None else ""
     candidates = conn.execute(
-        """
+        f"""
         SELECT c.*, COALESCE(a.commission_split_type, 'flat') AS commission_split_type,
                a.agency_group
         FROM contracts c
         LEFT JOIN agencies a ON a.agency_code = c.agency_code
-        WHERE c.status = 'active'
-        """
+        WHERE c.status = 'active'{period_clause}
+        """,
+        (period_start, period_end) if period_start is not None else (),
     ).fetchall()
     has_event = {
         (e["po_no"], e["trigger_type"])
@@ -579,7 +591,11 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None, period_start=No
     RECONSTRUCTED per-scope breakdown of that same history - see
     _reconstruct_scoped_historical_entries - since the real file itself
     only ever carries one company-wide total per "As at" date, not a
-    per-agency one.
+    per-agency one. A period-scoped call (period_start given) ALWAYS
+    takes the reconstructed path too, even for the "All" sheet - the
+    verbatim historical_summary_rows total has no per-month breakdown
+    to filter by, but the reconstruction already works PO by PO, so it
+    naturally gives each period its own share of the pre-tool history.
 
     Each row keeps its run_id so _write_summary_table can tell which
     row is the one just processed and highlight only that one yellow -
@@ -683,23 +699,31 @@ def _load_summary_rows(conn, agency_group=None, agent_name=None, period_start=No
             r["agent_commission"], r["fb_lead_deduction"],
         ))
 
-    # Skipped entirely in period mode, same reasoning as
-    # _load_master_rows: pre-tool historical-absorption money has no
-    # clean per-day date to filter by.
-    if period_start is None:
-        if agency_group is None and agent_name is None:
-            historical = conn.execute(
-                "SELECT date_record, full_commission, first_half_commission, second_half_commission, remarks "
-                "FROM historical_summary_rows"
-            ).fetchall()
-            for h in historical:
-                entries.append((
-                    h["date_record"], None,
-                    h["full_commission"], h["first_half_commission"], h["second_half_commission"],
-                    h["remarks"], 0.0, 0.0,
-                ))
-        else:
-            entries.extend(_reconstruct_scoped_historical_entries(conn, agency_group, agent_name))
+    # The unscoped, non-period "All" sheet trusts historical_summary_rows
+    # verbatim - it's the real file's own company-wide totals, no
+    # reconstruction needed. Every other case (scoped to an
+    # agency/agent, or period-scoped, or both) needs a per-PO
+    # breakdown that raw table doesn't have, so it's reconstructed
+    # instead - see _reconstruct_scoped_historical_entries, which
+    # already works PO by PO and so filters by period_start/period_end
+    # for free, giving each period's own months their own share of the
+    # pre-tool history instead of it only ever showing on the
+    # unscoped report.
+    if period_start is None and agency_group is None and agent_name is None:
+        historical = conn.execute(
+            "SELECT date_record, full_commission, first_half_commission, second_half_commission, remarks "
+            "FROM historical_summary_rows"
+        ).fetchall()
+        for h in historical:
+            entries.append((
+                h["date_record"], None,
+                h["full_commission"], h["first_half_commission"], h["second_half_commission"],
+                h["remarks"], 0.0, 0.0,
+            ))
+    else:
+        entries.extend(_reconstruct_scoped_historical_entries(
+            conn, agency_group, agent_name, period_start=period_start, period_end=period_end,
+        ))
 
     entries.sort(key=lambda e: e[0])
 
@@ -1454,10 +1478,13 @@ def generate_period_report(conn, period_start, period_end, output_path):
     logic the standing per-run report uses, just pre-filtered to one
     month's own POs.
 
-    Deliberately does NOT include the pre-tool historical-absorption
-    cutoff money (see _load_master_rows/_load_summary_rows) - by
-    agreement, kept on the standing per-run report only rather than
-    also reconstructing a per-month breakdown of that lump-sum figure.
+    Includes the pre-tool historical-absorption money too, scoped to
+    the period's own months (see _load_master_rows/_load_summary_rows
+    and _reconstruct_scoped_historical_entries) - a March file's
+    already-processed history (paid before this tool ever existed)
+    shows on March's period report right alongside whatever's since
+    been confirmed through the tool itself, not just on the unscoped
+    standing report.
 
     Raises ValueError if no PO was purchased in this range at all, or
     none of them have anything confirmed yet - same "nothing
