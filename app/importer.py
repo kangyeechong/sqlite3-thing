@@ -457,14 +457,19 @@ def _build_contract_fields(raw_row):
         "installment_1_commission_paid_date": _to_iso_date(raw_row.get("1st Half Commission Paid Date")),
         "installment_6_commission_paid_date": _to_iso_date(raw_row.get("Balance Half Commission Paid Date")),
         "remarks": remarks,
-        # Overridden to 1 by import_master_report for a PO found in
-        # this upload's own AW Consultancy-style referral-fee
-        # breakdown sheet (see _read_referral_flagged_po_nos) - left at
-        # the schema default here since a live Kenjin export never
-        # carries that sheet at all, and _upsert_contract's sticky
-        # merge means this default never wipes out an already-known
-        # flag from an earlier upload.
-        "fb_lead_referred": 0,
+        # Two independent signals feed this, both ultimately just an
+        # "is there any reason to believe this PO is referral-sourced"
+        # check: this one straight from Remarks (see
+        # parsing.detect_fb_lead_referred - the ONGOING path for a
+        # brand-new sale, since Remarks is read on every upload), and a
+        # second one import_master_report ORs in afterward for a PO
+        # found in this upload's own AW Consultancy-style referral-fee
+        # breakdown sheet (see _read_referral_flagged_po_nos - only
+        # ever present on a hand-maintained pre-existing file, for
+        # onboarding old history). Either firing is enough - never both
+        # required. _upsert_contract's sticky merge means neither ever
+        # wipes out an already-known flag from an earlier upload.
+        "fb_lead_referred": 1 if parsing.detect_fb_lead_referred(remarks) else 0,
     }
 
 

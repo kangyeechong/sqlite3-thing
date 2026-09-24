@@ -28,6 +28,14 @@ import re
 _CANCELLED_KEYWORDS = ("cancelled", "cancel")
 _WITHDRAWAL_KEYWORDS = ("withdrawal", "withdrawn", "withdraw")
 _AT_NEED_KEYWORDS = ("at need",)
+# Confirmed with the business: "Referral Sales from XEKL" is the
+# established phrasing already used on real files for this - matching
+# the same historical file's own convention (see
+# app.importer._read_referral_flagged_po_nos, which reads this exact
+# same fact from a different source - a hand-maintained pre-existing
+# file's own deduction breakdown sheet, not Remarks) rather than
+# inventing a new one.
+_FB_LEAD_REFERRAL_KEYWORDS = ("referral sales from xekl",)
 
 # Matches "Inurnment on 04/06/2026" or "Inurnment on\n04/06/2026" or
 # "Inurnment: 04/06/2026", case-insensitive, DD/MM/YYYY.
@@ -61,6 +69,31 @@ def detect_case_type(remarks):
     if any(kw in lowered for kw in _AT_NEED_KEYWORDS):
         return "at_need"
     return "pre_need"
+
+
+def detect_fb_lead_referred(remarks):
+    """
+    True if Remarks marks this sale as FB-lead-referred (the
+    established phrase: "Referral Sales from XEKL" - see
+    _FB_LEAD_REFERRAL_KEYWORDS). This is the ONGOING path for a
+    brand-new sale - staff type this into Remarks (in Kenjin, so it
+    flows into the next export) once an agent verbally confirms the
+    lead came from XEKL's own Facebook ads, same as every other
+    Remarks-driven fact in this module.
+
+    Failing toward False (not referred) when the phrasing isn't
+    recognized is the SAFE direction here: it just means the 1.5%/3%
+    deduction doesn't get applied automatically and has to be handled
+    by hand, same as before this existed - not the risky direction of
+    inventing a deduction that shouldn't apply. contracts.fb_lead_referred
+    is also sticky once set (see app.importer._upsert_contract), so a
+    later upload whose Remarks happens to drop the phrase never un-sets
+    it either.
+    """
+    if not remarks:
+        return False
+    lowered = remarks.lower()
+    return any(kw in lowered for kw in _FB_LEAD_REFERRAL_KEYWORDS)
 
 
 def extract_inurnment_date(remarks):

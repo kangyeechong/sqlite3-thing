@@ -611,3 +611,77 @@ def test_fb_lead_referred_flag_is_sticky_across_a_later_routine_upload(tmp_path)
         "SELECT fb_lead_referred FROM contracts WHERE po_no = 70062"
     ).fetchone()["fb_lead_referred"] == 1  # still flagged, not wiped by the plain re-upload
     conn.close()
+
+
+def test_remarks_containing_the_referral_phrase_flags_fb_lead_referred(tmp_path):
+    """
+    The ONGOING path for a brand-new sale (unlike the AW Consultancy
+    breakdown sheet, which only ever exists on a hand-maintained
+    pre-existing file): staff type "Referral Sales from XEKL" into
+    Remarks once an agent verbally confirms a Facebook-lead referral,
+    same as every other Remarks-driven fact this importer already
+    reads. Matched case-insensitively, and still fires when combined
+    with other text like "Early Settlement".
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 70070, "Customer ID": "CUSTR4", "Customer Name": "Customer R4",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+         "Remarks": "Referral Sales from XEKL"},
+        {"No": 2, "PO No": 70071, "Customer ID": "CUSTR5", "Customer Name": "Customer R5",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+         "Remarks": "referral sales from xekl\nEarly Settlement"},  # lowercase + combined text
+        {"No": 3, "PO No": 70072, "Customer ID": "CUSTR6", "Customer Name": "Customer R6",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+         "Remarks": "PO issued under someone else's account"},  # no referral phrase
+    ])
+
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx_path))
+    conn.commit()
+
+    flags = {
+        po_no: conn.execute(
+            "SELECT fb_lead_referred FROM contracts WHERE po_no = ?", (po_no,)
+        ).fetchone()["fb_lead_referred"]
+        for po_no in (70070, 70071, 70072)
+    }
+    assert flags == {70070: 1, 70071: 1, 70072: 0}
+    conn.close()
+
+
+def test_fb_lead_referred_from_remarks_is_also_sticky(tmp_path):
+    """Same sticky guarantee as the breakdown-sheet path: once Remarks
+    has flagged a PO, a later routine upload whose Remarks no longer
+    repeats the phrase (or is blank) must not un-flag it."""
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 70073, "Customer ID": "CUSTR7", "Customer Name": "Customer R7",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Remarks": "Referral Sales from XEKL",
+    }])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx1))
+    conn.commit()
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 70073"
+    ).fetchone()["fb_lead_referred"] == 1
+
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 70073, "Customer ID": "CUSTR7", "Customer Name": "Customer R7",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Full Settlement Paid Date": datetime.date(2026, 9, 1),
+        "Remarks": None,
+    }])
+    import_master_report(conn, str(xlsx2))
+    conn.commit()
+
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 70073"
+    ).fetchone()["fb_lead_referred"] == 1  # still flagged
+    conn.close()
