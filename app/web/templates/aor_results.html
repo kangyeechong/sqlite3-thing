@@ -9,8 +9,16 @@
     <p class="muted">{{ import_result.receipts_outside_period }} receipt{{ "" if import_result.receipts_outside_period == 1 else "s" }} in this file fell outside {{ period_start }}-{{ period_end }} (or had no date at all) - left untouched, ready to be picked up whenever you upload for the period they actually belong to.</p>
   {% endif %}
 
-  <p><a class="button" href="{{ url_for('web.download_aor_annotated', upload_id=aor_upload_id) }}">Download annotated copy</a>
-     <span class="muted">&mdash; your uploaded file, unchanged, plus one more sheet ("Filtered") with just the rows that mattered pulled out and highlighted (green for a completed full payment, yellow for a 1st/6th installment) &mdash; the same way this gets marked up by hand today.</span></p>
+  <p class="muted">Download annotated copy &mdash; your uploaded file, unchanged, plus "Payments (PO Date)" and "Valid Payments (PO Date)" (highlighted green for a completed full payment, yellow for a 1st/6th installment &mdash; the same way this gets marked up by hand today), both narrowed to whichever PO purchase month you pick below (receipts can settle a PO purchased in an entirely different month from this {{ period_start }}-{{ period_end }} payment window, so that's a separate date range from the one above).</p>
+  <form method="get" action="{{ url_for('web.download_aor_annotated', upload_id=aor_upload_id) }}">
+    <label>PO purchase period start
+      <input type="date" name="po_period_start" required>
+    </label>
+    <label>PO purchase period end
+      <input type="date" name="po_period_end" required>
+    </label>
+    <button class="button" type="submit">Download annotated copy</button>
+  </form>
 
   <p><a class="button" href="{{ url_for('web.download_aor_period', period_start=period_start, period_end=period_end) }}">Download {{ period_start }} to {{ period_end }} payment audit</a>
      <span class="muted">&mdash; every receipt dated in this period across ALL your uploads so far (not just this one file), plus a second sheet with just the valid commission-triggering payments among them.</span></p>

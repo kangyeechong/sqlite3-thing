@@ -171,7 +171,7 @@ def test_annotate_aor_file_scoped_to_upload_excludes_an_earlier_uploads_receipts
     Staff process month by month, but the real Kenjin export is
     cumulative (an "August" export re-lists every receipt back to
     whenever records began, not just August's) - when annotate_aor_file
-    is given the upload it's regenerating the Filtered sheet for (see
+    is given the upload it's regenerating the new sheets for (see
     /download-aor-annotated/<id>), an old month's already-processed
     receipt must not show up again just because a later, wider export
     happens to repeat it.
@@ -180,9 +180,9 @@ def test_annotate_aor_file_scoped_to_upload_excludes_an_earlier_uploads_receipts
     xlsx_master = tmp_path / "master.xlsx"
     build_master_report(xlsx_master, [
         {"No": 1, "PO No": 80005, "Customer ID": "CUSTA5", "Customer Name": "Customer A5",
-         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
         {"No": 2, "PO No": 80006, "Customer ID": "CUSTA6", "Customer Name": "Customer A6",
-         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
     ])
     process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
 
@@ -212,11 +212,12 @@ def test_annotate_aor_file_scoped_to_upload_excludes_an_earlier_uploads_receipts
     conn = get_connection(db_path)
     output_path = tmp_path / "annotated_august.xlsx"
     annotate_aor_file(
-        str(xlsx_august), str(output_path), conn=conn, aor_upload_id=result_august["aor_upload_id"],
+        str(xlsx_august), str(output_path), conn, "2026-01-01", "2026-12-31",
+        aor_upload_id=result_august["aor_upload_id"],
     )
     conn.close()
 
-    rows = _filtered_rows(openpyxl.load_workbook(output_path))
+    rows = _valid_rows(openpyxl.load_workbook(output_path))
     assert [r[0] for r in rows] == ["TRF 10/08/2026 (INST 01/24)"]  # not June's repeated row
 
 
@@ -226,14 +227,14 @@ def test_annotate_aor_file_falls_back_to_unscoped_for_an_upload_predating_the_li
     existed on aor_receipts has no receipts linked to it at all (every
     one of them is orphaned, not genuinely empty) - scoping to that
     empty set would turn re-downloading an old upload's annotated copy
-    into a blank Filtered sheet the moment this feature ships. Falls
-    back to the old unscoped behavior instead.
+    into a blank sheet the moment this feature ships. Falls back to the
+    old unscoped behavior instead.
     """
     db_path = _db_path(tmp_path)
     xlsx_master = tmp_path / "master.xlsx"
     build_master_report(xlsx_master, [{
         "No": 1, "PO No": 80007, "Customer ID": "CUSTA7", "Customer Name": "Customer A7",
-        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1),
     }])
     process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
 
@@ -253,10 +254,13 @@ def test_annotate_aor_file_falls_back_to_unscoped_for_an_upload_predating_the_li
     conn.commit()
 
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path), conn=conn, aor_upload_id=result["aor_upload_id"])
+    annotate_aor_file(
+        str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31",
+        aor_upload_id=result["aor_upload_id"],
+    )
     conn.close()
 
-    rows = _filtered_rows(openpyxl.load_workbook(output_path))
+    rows = _valid_rows(openpyxl.load_workbook(output_path))
     assert [r[0] for r in rows] == ["TRF 10/06/2026 (INST 01/24)"]  # shown, not hidden
 
 
@@ -268,8 +272,8 @@ def test_annotate_aor_file_shows_an_empty_filtered_sheet_when_the_period_genuine
     excluded everything in the file) used to trip the same "fall back
     to unscoped" logic as a real pre-migration upload, dumping every
     trigger-shaped row anywhere in the file - including whatever other
-    months a real cumulative Kenjin export repeats - into "Filtered"
-    instead of correctly showing nothing. aor_uploads.period_start being
+    months a real cumulative Kenjin export repeats - into the new
+    sheets instead of correctly showing nothing. aor_uploads.period_start being
     recorded (this upload DID go through period-aware code) is what
     tells the two cases apart now.
     """
@@ -277,7 +281,7 @@ def test_annotate_aor_file_shows_an_empty_filtered_sheet_when_the_period_genuine
     xlsx_master = tmp_path / "master.xlsx"
     build_master_report(xlsx_master, [{
         "No": 1, "PO No": 80008, "Customer ID": "CUSTA8", "Customer Name": "Customer A8",
-        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 6, 1),
     }])
     process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
 
@@ -295,17 +299,31 @@ def test_annotate_aor_file_shows_an_empty_filtered_sheet_when_the_period_genuine
 
     conn = get_connection(db_path)
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path), conn=conn, aor_upload_id=result["aor_upload_id"])
+    # A wide-open PO-date range on purpose - if the fallback-to-unscoped
+    # bug reappeared, June's receipt (whose PO Date is well inside this
+    # range) would show up here; it must not.
+    annotate_aor_file(
+        str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31",
+        aor_upload_id=result["aor_upload_id"],
+    )
     conn.close()
 
-    rows = _filtered_rows(openpyxl.load_workbook(output_path))
+    rows = _valid_rows(openpyxl.load_workbook(output_path))
     assert rows == []  # genuinely nothing matched March - not a fallback dump of June's receipt
 
 
 def test_annotate_aor_file_with_no_upload_id_still_shows_everything_in_the_file(tmp_path):
-    """The conn/aor_upload_id scoping is opt-in - a caller that doesn't
-    pass them (matching every use of this function before this
-    feature) keeps seeing exactly what's in the file, unscoped."""
+    """The aor_upload_id scoping is opt-in - a caller that doesn't pass
+    it keeps seeing every receipt in the file (still narrowed by the
+    required PO-date range, which is a different axis entirely)."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 90099, "Customer ID": "CUSTX", "Customer Name": "Customer X",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1),
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [{
         "No": 1, "Acknowledgment Receipt No": "RC-TEST-NOSCOPE",
@@ -314,10 +332,12 @@ def test_annotate_aor_file_with_no_upload_id_still_shows_everything_in_the_file(
         "Reference No": "TRF 10/08/2026 (INST 01/24)",
     }])
 
+    conn = get_connection(db_path)
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path))
+    annotate_aor_file(str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31")
+    conn.close()
 
-    rows = _filtered_rows(openpyxl.load_workbook(output_path))
+    rows = _valid_rows(openpyxl.load_workbook(output_path))
     assert [r[0] for r in rows] == ["TRF 10/08/2026 (INST 01/24)"]
 
 
@@ -616,12 +636,16 @@ def test_full_pipeline_aor_paid_date_flows_through_to_confirmed_report(tmp_path)
 # --- annotate_aor_file: the downloadable annotated copy -----------------
 #
 # The original sheet(s) must come through completely untouched - the
-# new "Filtered" sheet is the only place any coloring or row-picking
-# happens.
+# new "Payments (PO Date)"/"Valid Payments (PO Date)" sheets are the
+# only place any coloring or row-picking happens. Every test below
+# needs a real ledger contract (with a PO Date) for each PO it uses,
+# since the new sheets are scoped by that ledger-sourced date, not
+# anything in the AOR file itself.
 
-def _filtered_rows(workbook):
-    """Returns the "Filtered" sheet's data rows as (reference_no, fill)."""
-    sheet = workbook["Filtered"]
+def _valid_rows(workbook):
+    """Returns the "Valid Payments (PO Date)" sheet's data rows as
+    (reference_no, fill)."""
+    sheet = workbook["Valid Payments (PO Date)"]
     ref_col = AOR_HEADERS.index("Reference No") + 1
     rows = []
     for row_num in range(2, sheet.max_row + 1):
@@ -633,6 +657,14 @@ def _filtered_rows(workbook):
 
 
 def test_annotate_aor_file_leaves_the_original_sheet_untouched(tmp_path):
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 90000, "Customer ID": "CUSTB0", "Customer Name": "Customer B0",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1),
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [{
         "No": 1, "Acknowledgment Receipt No": "RC-Z-0001", "PO No": 90000,
@@ -641,8 +673,10 @@ def test_annotate_aor_file_leaves_the_original_sheet_untouched(tmp_path):
         "Reference No": "TRF 07/08/2026 (INST 01/24)",
     }])
 
+    conn = get_connection(db_path)
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path))
+    annotate_aor_file(str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31")
+    conn.close()
 
     original = openpyxl.load_workbook(xlsx_aor)
     result = openpyxl.load_workbook(output_path)
@@ -651,21 +685,31 @@ def test_annotate_aor_file_leaves_the_original_sheet_untouched(tmp_path):
     original_sheet = original[original.sheetnames[0]]
     result_sheet = result[original.sheetnames[0]]
     ref_col = AOR_HEADERS.index("Reference No") + 1
-    # The installment-1 row would be yellow in the filtered sheet, but
-    # the original sheet's own cell must be left plain - unmodified.
+    # The installment-1 row would be yellow in the new sheets, but the
+    # original sheet's own cell must be left plain - unmodified.
     assert result_sheet.cell(row=23, column=ref_col).fill.fill_type is None
     assert result_sheet.cell(row=23, column=ref_col).value == original_sheet.cell(row=23, column=ref_col).value
-    assert "Filtered" in result.sheetnames
-    assert "Filtered" not in original.sheetnames
+    assert "Payments (PO Date)" in result.sheetnames
+    assert "Valid Payments (PO Date)" in result.sheetnames
+    assert "Payments (PO Date)" not in original.sheetnames
+    assert "Valid Payments (PO Date)" not in original.sheetnames
 
 
 def test_annotate_aor_file_colors_a_full_payment_group_green(tmp_path):
     """
     The exact real-file scenario the business described: a PARTIAL (or
     the real "PATRIAL" typo) payment followed by a BALANCE PAYMENT for
-    the same PO is one completed sale - both rows land in the filtered
-    sheet colored green, not just the completing row.
+    the same PO is one completed sale - both rows land in the valid
+    payments sheet colored green, not just the completing row.
     """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 90001, "Customer ID": "CUSTB1", "Customer Name": "Customer B1",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1),
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [
         {
@@ -682,17 +726,29 @@ def test_annotate_aor_file_colors_a_full_payment_group_green(tmp_path):
         },
     ])
 
+    conn = get_connection(db_path)
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path))
+    annotate_aor_file(str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31")
+    conn.close()
 
     workbook = openpyxl.load_workbook(output_path)
-    rows = _filtered_rows(workbook)
+    rows = _valid_rows(workbook)
     assert [r[0] for r in rows] == ["C M6243 PATRIAL PAYMENT", "C V5135 BALANCE PAYMENT"]
     assert rows[0][1].fgColor.rgb == _GREEN_FILL.fgColor.rgb
     assert rows[1][1].fgColor.rgb == _GREEN_FILL.fgColor.rgb
 
 
 def test_annotate_aor_file_colors_installment_1_and_6_yellow(tmp_path):
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [
+        {"No": 1, "PO No": 90002, "Customer ID": "CUSTB2", "Customer Name": "Customer B2",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
+        {"No": 2, "PO No": 90003, "Customer ID": "CUSTB3", "Customer Name": "Customer B3",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
+    ])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [
         {
@@ -709,11 +765,13 @@ def test_annotate_aor_file_colors_installment_1_and_6_yellow(tmp_path):
         },
     ])
 
+    conn = get_connection(db_path)
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path))
+    annotate_aor_file(str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31")
+    conn.close()
 
     workbook = openpyxl.load_workbook(output_path)
-    rows = _filtered_rows(workbook)
+    rows = _valid_rows(workbook)
     assert [r[0] for r in rows] == ["TRF 07/08/2026 (INST 01/24)", "TRF 08/08/2026 (INST 06/24)"]
     assert rows[0][1].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
     assert rows[1][1].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
@@ -723,7 +781,17 @@ def test_annotate_aor_file_excludes_non_matching_rows_from_the_filtered_sheet(tm
     """A plain DEPOSIT that never leads to a full payment in this file,
     and an installment number that isn't 1 or 6, are real recognized
     rows - but neither is what a staff member filters for, so neither
-    shows up in the filtered sheet at all."""
+    shows up in the valid payments sheet at all."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [
+        {"No": 1, "PO No": 90004, "Customer ID": "CUSTB4", "Customer Name": "Customer B4",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
+        {"No": 2, "PO No": 90005, "Customer ID": "CUSTB5", "Customer Name": "Customer B5",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
+    ])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [
         {
@@ -740,17 +808,29 @@ def test_annotate_aor_file_excludes_non_matching_rows_from_the_filtered_sheet(tm
         },
     ])
 
+    conn = get_connection(db_path)
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path))
+    annotate_aor_file(str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31")
+    conn.close()
 
     workbook = openpyxl.load_workbook(output_path)
-    assert _filtered_rows(workbook) == []
+    assert _valid_rows(workbook) == []
 
 
 def test_annotate_aor_file_sorts_by_po_no_ascending(tmp_path):
-    """The filtered sheet reads by PO No, not by the file's own row
-    order - 20260299 before 20260300, etc - with each PO's own rows
-    (e.g. a PARTIAL/BALANCE pair) still kept together."""
+    """The new sheets read by PO No, not by the file's own row order -
+    20260299 before 20260300, etc - with each PO's own rows (e.g. a
+    PARTIAL/BALANCE pair) still kept together."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [
+        {"No": 1, "PO No": 20260300, "Customer ID": "CUSTD1", "Customer Name": "Customer D1",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
+        {"No": 2, "PO No": 20260299, "Customer ID": "CUSTD2", "Customer Name": "Customer D2",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001", "PO Date": datetime.date(2026, 1, 1)},
+    ])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [
         # Deliberately out of PO order in the source file.
@@ -774,11 +854,13 @@ def test_annotate_aor_file_sorts_by_po_no_ascending(tmp_path):
         },
     ])
 
+    conn = get_connection(db_path)
     output_path = tmp_path / "annotated.xlsx"
-    annotate_aor_file(str(xlsx_aor), str(output_path))
+    annotate_aor_file(str(xlsx_aor), str(output_path), conn, "2026-01-01", "2026-12-31")
+    conn.close()
 
     workbook = openpyxl.load_workbook(output_path)
-    filtered_sheet = workbook["Filtered"]
+    filtered_sheet = workbook["Valid Payments (PO Date)"]
     po_col = AOR_HEADERS.index("PO No") + 1
     po_nos = [filtered_sheet.cell(row=r, column=po_col).value for r in range(2, filtered_sheet.max_row + 1)]
     assert po_nos == [20260299, 20260299, 20260300]

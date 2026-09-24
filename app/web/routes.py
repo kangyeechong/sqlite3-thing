@@ -205,10 +205,13 @@ def upload_aor():
 @login_required
 def download_aor_annotated(upload_id):
     """
-    Regenerates and serves the colored copy of the AOR file uploaded
-    for this run (see app/aor.py's annotate_aor_file) - the same
-    green/yellow highlighting a staff member currently applies by hand
-    while filtering this file. Built fresh from the originally
+    Regenerates and serves the annotated copy of the AOR file uploaded
+    for this run (see app/aor.py's annotate_aor_file): every original
+    sheet untouched, plus "Payments (PO Date)" and "Valid Payments (PO
+    Date)" scoped to the PO purchase-date range given via
+    po_period_start/po_period_end query params (both required) - the
+    same green/yellow highlighting a staff member currently applies by
+    hand while filtering this file. Built fresh from the originally
     uploaded bytes on every request, same "generate on demand" shape
     as /download/<run_id> above, rather than caching the colored
     output. Keyed by the AOR upload itself (app.pipeline's
@@ -216,6 +219,13 @@ def download_aor_annotated(upload_id):
     nothing newly due still has no commission_runs row at all, but its
     file is always worth annotating and downloading.
     """
+    po_period_start = (request.args.get("po_period_start") or "").strip()
+    po_period_end = (request.args.get("po_period_end") or "").strip()
+    if not po_period_start or not po_period_end:
+        abort(400, description="po_period_start and po_period_end are both required.")
+    if po_period_start > po_period_end:
+        abort(400, description="po_period_start must not be after po_period_end.")
+
     conn = get_connection(current_app.config["DB_PATH"])
     try:
         upload_row = conn.execute(
@@ -233,12 +243,14 @@ def download_aor_annotated(upload_id):
 
             buffer = io.BytesIO()
             # Scoped to this upload's own receipts (see
-            # annotate_aor_file's conn/aor_upload_id params) - a
-            # cumulative re-export re-lists earlier months' receipts
-            # too, and staff process month by month, so the Filtered
-            # sheet shouldn't show an old month's rows as if newly
-            # relevant again.
-            annotate_aor_file(saved_path, buffer, conn=conn, aor_upload_id=upload_id)
+            # annotate_aor_file's aor_upload_id param) - a cumulative
+            # re-export re-lists earlier months' receipts too, and
+            # staff process month by month, so the new sheets
+            # shouldn't show an old upload's rows as if newly relevant
+            # again.
+            annotate_aor_file(
+                saved_path, buffer, conn, po_period_start, po_period_end, aor_upload_id=upload_id,
+            )
     finally:
         conn.close()
 

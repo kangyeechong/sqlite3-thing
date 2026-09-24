@@ -36,6 +36,7 @@ idempotency historical_summary_rows already uses for Date Record rows.
 """
 
 import datetime
+import os
 import re
 from dataclasses import dataclass, field
 
@@ -207,8 +208,9 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     every aor_receipts row this call writes. Optional - None for a
     caller that has no aor_uploads row yet (e.g. a script or test
     calling this directly) - it's only used later to scope
-    annotate_aor_file's "Filtered" sheet to one specific upload's own
-    newly-introduced receipts, never for the transfer logic above,
+    annotate_aor_file's new "Payments (PO Date)"/"Valid Payments (PO
+    Date)" sheets to one specific upload's own newly-introduced
+    receipts, never for the transfer logic above,
     which is already correctly scoped via aor_receipts' own
     UNIQUE(acknowledgment_receipt_no).
 
@@ -373,50 +375,65 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     return result
 
 
-def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
+def annotate_aor_file(file_path, output, conn, po_period_start, po_period_end, aor_upload_id=None):
     """
     Writes a copy of the AOR export to `output` (a path or a file-like
-    object) with every original sheet left exactly as uploaded, plus
-    one new sheet appended - "Filtered" - containing only the rows a
-    staff member currently pulls out by hand while going through this
-    file: every receipt belonging to a PO that reached full payment in
-    this file (the whole group leading up to it, not just the
-    completing row - a "PARTIAL"/"PATRIAL PAYMENT" followed by a
-    "BALANCE PAYMENT" for the same PO is one completed sale, and both
-    rows are included), colored green, and every receipt whose own
-    (INST X/Y) tag is installment 1 or 6 specifically, colored yellow.
-    Confirmed against a real annotated sample - these are the exact
-    colors and grouping the business already uses. Sorted by PO No
-    ascending (20260299, 20260300, ...) rather than the file's own row
-    order, so every row for one PO sits together and the sheet reads
-    top to bottom in order.
+    object) - every original sheet left exactly as uploaded (a genuine
+    1:1 copy for cross-referencing against what was actually uploaded,
+    formulas and all - see the "reads the file twice" note below),
+    plus two new sheets built from the SAME raw rows, both scoped by
+    the PO's own PURCHASE date (po_period_start/po_period_end, ISO
+    date strings, inclusive both ends) - a different axis from the
+    receipt date the file itself carries (payments received this month
+    routinely settle POs purchased in an earlier one):
+
+      - "Payments (PO Date)": every row whose own PO was purchased in
+        that range, using the file's own raw columns verbatim - the
+        real AOR export's own Customer ID/Name are frequently blank,
+        and this is deliberately NOT enriched from the ledger (that's
+        what build_period_audit_workbook is for) - this sheet is
+        purely a faithful reflection of what's actually in the file,
+        the same "exact copy" spirit as the untouched original sheets,
+        just narrowed down. Two extra columns this tool adds on top:
+        Trigger Type and Source File.
+      - "Valid Payments (PO Date)": that same subset narrowed further
+        to the ones that actually matter for commission - every
+        receipt belonging to a PO that reached full payment in this
+        file (the whole group leading up to it, not just the
+        completing row - a "PARTIAL"/"PATRIAL PAYMENT" followed by a
+        "BALANCE PAYMENT" for the same PO is one completed sale, and
+        both rows are included), colored green, and every receipt
+        whose own (INST X/Y) tag is installment 1 or 6 specifically,
+        colored yellow - confirmed against a real annotated sample,
+        the exact colors and grouping the business already uses by
+        hand.
+
+    Both new sheets are sorted by PO No ascending (20260299, 20260300,
+    ...) rather than the file's own row order, so a PO's group of rows
+    sits together and each sheet reads top to bottom in order.
 
     Reads the uploaded file twice on purpose: once with data_only=True
     to classify rows and pull out values (the same read every other
     function in this module uses), and once completely untouched to
-    build the output from - so a cell that happens to hold a formula
-    in the original file is never silently flattened to its cached
-    value just because this function also had to read it.
+    build the original sheet(s) from - so a cell that happens to hold
+    a formula in the original file is never silently flattened to its
+    cached value just because this function also had to read it.
 
-    conn/aor_upload_id: optional - when both are given, the Filtered
-    sheet is scoped to only the receipts THIS SPECIFIC upload actually
-    introduced (via aor_receipts.aor_upload_id, stamped at import time
-    - see import_aor_report). Staff process month by month, but the
-    real Kenjin export is cumulative (an "August" export re-lists every
+    aor_upload_id: optional - when given (with conn, always required),
+    both new sheets are ALSO scoped to only the receipts THIS SPECIFIC
+    upload actually introduced (via aor_receipts.aor_upload_id,
+    stamped at import time - see import_aor_report), on top of the
+    PO-date scoping above. Staff process month by month, but the real
+    Kenjin export is cumulative (an "August" export re-lists every
     receipt back to whenever records began), so without this, an old
-    month's receipts would show up as if newly relevant every time a
-    later cumulative export gets annotated. Left as None (the default)
-    this stays exactly what it always was: no ledger lookups, no side
-    effects, purely a reflection of what's IN the file - which is
-    still exactly right for the very first time a given upload's own
-    bytes get annotated, since every receipt it just imported is, by
-    definition, stamped with its own aor_upload_id.
+    upload's receipts would show up as if newly relevant every time a
+    later cumulative export gets annotated.
     """
     values_workbook = openpyxl.load_workbook(file_path, data_only=True)
     aor_sheets = [sheet for sheet in values_workbook.worksheets if _is_aor_shaped(sheet)]
 
     this_upload_receipts = None
-    if conn is not None and aor_upload_id is not None:
+    if aor_upload_id is not None:
         this_upload_receipts = {
             row["acknowledgment_receipt_no"] for row in conn.execute(
                 "SELECT acknowledgment_receipt_no FROM aor_receipts WHERE aor_upload_id = ?",
@@ -435,13 +452,11 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
             # sheet the way the first case's fallback intends - it
             # dumps every trigger-shaped row anywhere in this file,
             # including whatever other months a real cumulative Kenjin
-            # export repeats, right back into "Filtered" (found live:
-            # a period that genuinely matched nothing still showed a
-            # year's worth of unrelated dates). aor_uploads.period_start
-            # disambiguates them directly: recorded means this upload
-            # DID go through period-aware code, so trust the empty
-            # result; NULL means it predates that column ever existing,
-            # so fall back exactly as before.
+            # export repeats. aor_uploads.period_start disambiguates
+            # them directly: recorded means this upload DID go through
+            # period-aware code, so trust the empty result; NULL means
+            # it predates that column ever existing, so fall back
+            # exactly as before.
             went_through_period_filtering = conn.execute(
                 "SELECT period_start FROM aor_uploads WHERE id = ?", (aor_upload_id,),
             ).fetchone()
@@ -450,7 +465,10 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
 
     # First pass: which POs have a full-payment completion anywhere in
     # this file, so every receipt row for that PO (not just the
-    # completing one) is pulled into the filtered sheet as green.
+    # completing one) is pulled into "Valid Payments (PO Date)" as
+    # green - regardless of the PO-date filter itself, so a full
+    # payment's own earlier deposit/partial rows aren't cut off just
+    # because this pass hasn't reached the PO-date check yet.
     full_payment_pos = set()
     for sheet in aor_sheets:
         for raw_row in _read_aor_rows(sheet):
@@ -461,11 +479,32 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
             if kind == "full_payment":
                 full_payment_pos.add(int(po_no))
 
-    # Second pass: pick out just the rows that matter, in the order
-    # they appear in the file - same spirit as a human scrolling
+    # PO Date is never in the AOR export itself (confirmed - Kenjin's
+    # AOR file has no such column) - looked up from the ledger once,
+    # by whichever PO Nos this file actually mentions, purely to
+    # decide which rows belong in the two new sheets. Never shown as
+    # its own column: the point of these two sheets is the file's own
+    # raw data, untouched by ledger enrichment.
+    file_po_nos = {
+        int(raw_row["PO No"])
+        for sheet in aor_sheets for raw_row in _read_aor_rows(sheet)
+        if _is_positive_whole_number(raw_row.get("PO No"))
+    }
+    po_dates_by_po_no = {}
+    if file_po_nos:
+        placeholders = ",".join("?" for _ in file_po_nos)
+        po_dates_by_po_no = {
+            row["po_no"]: row["po_date"] for row in conn.execute(
+                f"SELECT po_no, po_date FROM contracts WHERE po_no IN ({placeholders})",
+                tuple(file_po_nos),
+            )
+        }
+
+    # Second pass: build both new sheets' rows in one walk through the
+    # file, in the order rows appear - same spirit as a human scrolling
     # through it top to bottom and filtering as they go.
     headers = None
-    filtered_rows = []  # list of (po_no, row_values, fill)
+    payment_rows = []  # list of (po_no, row_values, fill_or_None)
     for sheet in aor_sheets:
         header_row_num = _find_header_row(sheet)
         if header_row_num is None:
@@ -478,6 +517,10 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
                 if raw_row.get("Acknowledgment Receipt No") not in this_upload_receipts:
                     continue
             po_no = raw_row.get("PO No")
+            po_date = po_dates_by_po_no.get(int(po_no)) if _is_positive_whole_number(po_no) else None
+            if po_date is None or not (po_period_start <= po_date <= po_period_end):
+                continue
+
             kind, numbers = _classify_reference(raw_row.get("Reference No"))
             targets = _targets_for_classification(kind, numbers)
             fill = None
@@ -485,29 +528,37 @@ def annotate_aor_file(file_path, output, conn=None, aor_upload_id=None):
                 fill = _YELLOW_FILL
             elif _is_positive_whole_number(po_no) and int(po_no) in full_payment_pos:
                 fill = _GREEN_FILL
-            if fill is not None:
-                filtered_rows.append((po_no, [raw_row.get(h) for h in sheet_headers], fill))
+            trigger_type = ",".join(sorted(targets)) if targets else None
+            values = [raw_row.get(h) for h in sheet_headers] + [trigger_type, os.path.basename(file_path)]
+            payment_rows.append((po_no, values, fill))
 
     # Sorted by PO No ascending (20260299, 20260300, ...) rather than
     # the file's own row order, so a PO's group of rows is easy to
     # find and everything reads in one consistent order.
-    filtered_rows.sort(key=lambda entry: entry[0] if _is_positive_whole_number(entry[0]) else float("inf"))
+    payment_rows.sort(key=lambda entry: entry[0] if _is_positive_whole_number(entry[0]) else float("inf"))
+    valid_rows = [entry for entry in payment_rows if entry[2] is not None]
 
     output_workbook = openpyxl.load_workbook(file_path)  # untouched - this is what gets kept as-is
-    filtered_sheet_name = "Filtered"
-    suffix = 2
-    while filtered_sheet_name in output_workbook.sheetnames:
-        filtered_sheet_name = f"Filtered ({suffix})"
-        suffix += 1
-    filtered_sheet = output_workbook.create_sheet(filtered_sheet_name)
+    output_headers = (headers or []) + ["Trigger Type", "Source File"]
+
+    def _write_sheet(name, rows):
+        sheet_name = name
+        suffix = 2
+        while sheet_name in output_workbook.sheetnames:
+            sheet_name = f"{name} ({suffix})"
+            suffix += 1
+        sheet = output_workbook.create_sheet(sheet_name)
+        for col, header in enumerate(output_headers, start=1):
+            sheet.cell(row=1, column=col, value=header)
+        for row_offset, (_, values, fill) in enumerate(rows, start=2):
+            for col, value in enumerate(values, start=1):
+                cell = sheet.cell(row=row_offset, column=col, value=value)
+                if fill is not None:
+                    cell.fill = fill
 
     if headers is not None:
-        for col, header in enumerate(headers, start=1):
-            filtered_sheet.cell(row=1, column=col, value=header)
-        for row_offset, (_, values, fill) in enumerate(filtered_rows, start=2):
-            for col, value in enumerate(values, start=1):
-                cell = filtered_sheet.cell(row=row_offset, column=col, value=value)
-                cell.fill = fill
+        _write_sheet("Payments (PO Date)", payment_rows)
+        _write_sheet("Valid Payments (PO Date)", valid_rows)
 
     output_workbook.save(output)
 
@@ -563,8 +614,8 @@ def build_period_audit_workbook(
     failing - and is naturally excluded from the two PO-date-scoped
     sheets, since there's no PO Date to filter by either.
 
-    Colored the same way annotate_aor_file's "Filtered" sheet already
-    is (yellow for installment 1/6, green for a full payment) - same
+    Colored the same way annotate_aor_file's "Valid Payments (PO Date)"
+    sheet already is (yellow for installment 1/6, green for a full payment) - same
     precedence too (yellow wins if a receipt's own trigger_type somehow
     carries both) - so this reads consistently with what staff already
     know from that sheet. A non-triggering or unmatched row (no

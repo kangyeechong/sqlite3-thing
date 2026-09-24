@@ -587,12 +587,23 @@ def test_past_reports_lists_aor_uploads_even_with_nothing_newly_due(client, tmp_
 
     match = re.search(rb"/download-aor-annotated/(\d+)", page.data)
     assert match is not None, "Past Reports should link to the annotated download"
-    download_response = client.get(match.group(0).decode())
+    download_response = client.get(
+        match.group(0).decode(),
+        query_string={"po_period_start": "2026-01-01", "po_period_end": "2026-12-31"},
+    )
     assert download_response.status_code == 200
 
 
 def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     _login(client)
+
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 99998, "Customer ID": "CUSTWEBAOR3", "Customer Name": "Web AOR Customer 3",
+        "PO Date": datetime.date(2026, 8, 1), "Agency Code": "AC001",
+    }])
+    upload_response = _upload(client, xlsx_master)
+    assert upload_response.status_code == 200
 
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [{
@@ -608,7 +619,10 @@ def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     assert match is not None, "Results page should link to the annotated download"
     run_id = int(match.group(1))
 
-    download_response = client.get(f"/download-aor-annotated/{run_id}")
+    download_response = client.get(
+        f"/download-aor-annotated/{run_id}",
+        query_string={"po_period_start": "2026-08-01", "po_period_end": "2026-08-31"},
+    )
     assert download_response.status_code == 200
     assert download_response.headers["Content-Type"] == (
         "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -619,9 +633,10 @@ def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     original_sheet = workbook.worksheets[0]
     assert original_sheet.cell(row=23, column=1).value == 1
     # ...and a stamp duty row isn't a full-payment or installment 1/6
-    # receipt, so the new "Filtered" sheet has no data rows for it.
-    filtered_sheet = workbook["Filtered"]
-    assert filtered_sheet.cell(row=2, column=1).value is None
+    # receipt, so the new "Valid Payments (PO Date)" sheet has no data
+    # rows for it.
+    valid_sheet = workbook["Valid Payments (PO Date)"]
+    assert valid_sheet.cell(row=2, column=1).value is None
 
 
 def test_download_aor_annotated_requires_login(client):
@@ -632,7 +647,10 @@ def test_download_aor_annotated_requires_login(client):
 
 def test_download_aor_annotated_404s_for_an_unknown_run(client):
     _login(client)
-    response = client.get("/download-aor-annotated/999999")
+    response = client.get(
+        "/download-aor-annotated/999999",
+        query_string={"po_period_start": "2026-01-01", "po_period_end": "2026-12-31"},
+    )
     assert response.status_code == 404
 
 

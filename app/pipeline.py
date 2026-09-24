@@ -107,8 +107,9 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None,
         # id exists in time to be stamped onto every aor_receipts row
         # this call writes (see import_aor_report's aor_upload_id
         # param) - that stamp is what lets annotate_aor_file later
-        # scope the "Filtered" sheet to just this upload's own newly-
-        # introduced receipts, not everything the file happens to
+        # scope the new "Payments (PO Date)"/"Valid Payments (PO Date)"
+        # sheets to just this upload's own newly-introduced receipts,
+        # not everything the file happens to
         # repeat from an earlier month (the real Kenjin export is
         # cumulative). Kept regardless of whether anything ends up
         # newly due so the "download annotated copy" route can
