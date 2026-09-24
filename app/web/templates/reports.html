@@ -50,25 +50,6 @@
     <button class="button" type="submit">Download Overall Commission report</button>
   </form>
 
-  <h2>AOR payment audit by period</h2>
-  <p class="muted">Every receipt dated in a chosen period, across all your AOR uploads so far - not tied to any one upload. Second sheet is just the valid commission-triggering payments among them.</p>
-  <p class="muted">Optionally add a PO purchase-date range too (e.g. payments received in September for POs purchased in March) - this adds two more sheets narrowing everything down to just that month's own POs, and just the valid payments among those. Leave both blank to skip this and get the original two sheets only.</p>
-  <form method="get" action="{{ url_for('web.download_aor_period') }}">
-    <label>Receipt period start
-      <input type="date" name="period_start" required>
-    </label>
-    <label>Receipt period end
-      <input type="date" name="period_end" required>
-    </label>
-    <label>PO purchase period start (optional)
-      <input type="date" name="po_period_start">
-    </label>
-    <label>PO purchase period end (optional)
-      <input type="date" name="po_period_end">
-    </label>
-    <button class="button" type="submit">Download payment audit</button>
-  </form>
-
   <h2>Past AOR uploads</h2>
   <p class="muted">Every AOR file ever uploaded, whether or not it happened to raise anything new that time - its annotated copy stays downloadable here. Pick the PO purchase month you want the annotated copy narrowed to.</p>
   {% if aor_uploads %}

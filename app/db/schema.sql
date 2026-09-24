@@ -224,10 +224,9 @@ CREATE TABLE IF NOT EXISTS historical_summary_rows (
 -- genuinely appears in that file.
 -- receipt_date/reference_text/payment_received/trigger_type (added
 -- after the columns above, all nullable - NULL for every row written
--- before this existed) persist enough about each receipt to build an
--- audit report for a chosen period later, spanning however many
--- uploads/files actually cover it - see app/aor.py's
--- build_period_audit_workbook. trigger_type is NULL for a receipt
+-- before this existed) persist enough about each receipt to record
+-- what it actually was, independent of whether it ended up changing
+-- anything on the contract. trigger_type is NULL for a receipt
 -- that was recognized but non-triggering (a Deposit, Stamp Duty, or
 -- an installment number that isn't 1 or 6) or whose PO wasn't in the
 -- ledger; otherwise it's a comma-joined list of whichever of

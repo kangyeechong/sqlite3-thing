@@ -19,7 +19,7 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
-from ..aor import annotate_aor_file, build_period_audit_workbook
+from ..aor import annotate_aor_file
 from ..db.connection import get_connection
 from ..pipeline import (
     confirm_events, list_aor_uploads, list_confirmed_runs, list_runs_with_pending_events,
@@ -263,61 +263,6 @@ def download_aor_annotated(upload_id):
     )
 
 
-@bp.route("/download-aor-period")
-@login_required
-def download_aor_period():
-    """
-    The "check every payment for a period" audit file (see
-    app.aor.build_period_audit_workbook) - two sheets: every receipt
-    dated in the chosen period, and just the ones that were valid
-    commission-triggering payments among them. Built purely from
-    aor_receipts, so it naturally combines however many separate AOR
-    uploads actually cover the period (the real export is routinely
-    split across files that don't respect month boundaries) - not tied
-    to one specific upload the way the annotated-copy download is.
-    A plain GET with query params, not a form post: this only reads
-    already-persisted state, nothing is uploaded or changed.
-
-    po_period_start/po_period_end: optional, both required together -
-    adds two more sheets narrowing everything down further by the PO's
-    own purchase date, a genuinely different axis from the receipt
-    period above (payments received in September routinely settle POs
-    purchased back in March). Left blank, this behaves exactly as
-    before - just the two receipt-period sheets.
-    """
-    period_start = (request.args.get("period_start") or "").strip()
-    period_end = (request.args.get("period_end") or "").strip()
-    if not period_start or not period_end:
-        abort(400, description="period_start and period_end are both required.")
-    if period_start > period_end:
-        abort(400, description="period_start must not be after period_end.")
-
-    po_period_start = (request.args.get("po_period_start") or "").strip() or None
-    po_period_end = (request.args.get("po_period_end") or "").strip() or None
-    if (po_period_start is None) != (po_period_end is None):
-        abort(400, description="po_period_start and po_period_end must both be given, or both left blank.")
-    if po_period_start is not None and po_period_start > po_period_end:
-        abort(400, description="po_period_start must not be after po_period_end.")
-
-    conn = get_connection(current_app.config["DB_PATH"])
-    try:
-        buffer = io.BytesIO()
-        build_period_audit_workbook(
-            conn, period_start, period_end, buffer,
-            po_period_start=po_period_start, po_period_end=po_period_end,
-        )
-    finally:
-        conn.close()
-
-    buffer.seek(0)
-    return send_file(
-        buffer,
-        as_attachment=True,
-        download_name=f"aor_payments_{period_start}_to_{period_end}.xlsx",
-        mimetype="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-    )
-
-
 @bp.route("/reports")
 @login_required
 def reports():
@@ -461,8 +406,7 @@ def download_period():
     (see app.report.generate_period_report) - every PO with a
     commission event CONFIRMED with a trigger_date in the range, not
     the full standing ledger /download/<run_id> always shows. A plain
-    GET with query params, same reasoning as /download-aor-period:
-    this only reads already-persisted state.
+    GET with query params - this only reads already-persisted state.
     """
     period_start = (request.args.get("period_start") or "").strip()
     period_end = (request.args.get("period_end") or "").strip()
