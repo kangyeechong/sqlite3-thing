@@ -445,7 +445,8 @@ def test_a_receipt_for_a_po_not_in_the_ledger_yet_is_flagged(tmp_path):
     """An AOR export can reference a PO the Master report hasn't
     brought in yet (it covers a wider company-wide window) - flagged,
     not silently dropped, so staff know to upload the Master report
-    for it too."""
+    for it too. Deliberately NOT recorded into aor_receipts (see the
+    sibling test below) - see import_aor_report's own docstring for why."""
     db_path = _db_path(tmp_path)
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [{
@@ -456,10 +457,54 @@ def test_a_receipt_for_a_po_not_in_the_ledger_yet_is_flagged(tmp_path):
     }])
     result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
 
-    assert result["import_result"].receipts_imported == 1  # still recorded, never reprocessed
+    assert result["import_result"].receipts_imported == 0  # left unrecorded, not "recorded but empty"
     assert result["import_result"].paid_dates_written == 0
     assert len(result["import_result"].review_flags) == 1
     assert "doesn't exist in the ledger yet" in result["import_result"].review_flags[0].message
+
+
+def test_a_receipt_for_a_po_not_in_the_ledger_yet_is_retried_on_a_later_upload(tmp_path):
+    """
+    Regression test for a real production bug: if an AOR file gets
+    uploaded before the Master report that brings its PO into the
+    ledger (upload order staff got wrong, or simply hadn't uploaded
+    the Master report yet), the receipt used to be permanently marked
+    "seen" via aor_receipts' own UNIQUE(acknowledgment_receipt_no) -
+    with nothing actually applied, and no way to ever retry it, even
+    after the Master report showed up and even re-uploading the exact
+    same AOR file again. Now it's left unrecorded the first time, so a
+    later upload of the SAME file (once the PO exists) picks it up
+    cleanly.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-TEST-ORDER1",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 80012, "Customer ID": "CUSTA12", "Customer Name": "Customer A12",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+
+    # Uploaded "wrong order" - before the Master report exists at all.
+    result_first = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+    assert result_first["import_result"].receipts_imported == 0
+    assert result_first["import_result"].paid_dates_written == 0
+
+    # Master report shows up after the fact.
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80012, "Customer ID": "CUSTA12", "Customer Name": "Customer A12",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    # Re-uploading the EXACT SAME AOR file now must pick the receipt up.
+    result_second = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 18))
+    assert result_second["import_result"].receipts_imported == 1
+    assert result_second["import_result"].paid_dates_written == 1
+    assert result_second["import_result"].review_flags == []
+    assert len(result_second["raised_events"]) == 1
+    assert result_second["raised_events"][0]["po_no"] == 80012
 
 
 def test_a_non_1_or_6_installment_number_is_recorded_but_triggers_nothing(tmp_path):

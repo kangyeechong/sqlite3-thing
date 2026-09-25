@@ -202,6 +202,19 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     one) - this only ever fills in a blank, exactly like Accounts
     manually cross-checking this file and typing the date in once.
 
+    Upload order is deliberately NOT something the caller has to get
+    right: a receipt that would genuinely trigger a commission (a real
+    installment 1/6 or full-payment reference) but whose PO isn't in
+    the ledger yet is left completely unrecorded - not written to
+    aor_receipts at all - so it stays available for a future AOR
+    upload once the Master report for that PO exists, even if that
+    future upload is this exact same file re-uploaded unchanged.
+    Without this, aor_receipts' own UNIQUE(acknowledgment_receipt_no)
+    (needed to stop a real overlapping export from double-applying a
+    receipt) would also permanently swallow a receipt that never
+    actually got to apply anything the first time, just because the
+    AOR file happened to be uploaded before the Master report.
+
     aor_upload_id: the aor_uploads row this call is processing on
     behalf of (see app.pipeline.process_aor_upload), stamped onto
     every aor_receipts row this call writes purely as a record of which
@@ -294,6 +307,29 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                     result.receipts_outside_period += 1
                     continue
 
+            po_no_valid = _is_positive_whole_number(po_no)
+            kind, numbers = _classify_reference(raw_row.get("Reference No"))
+            targets = _targets_for_classification(kind, numbers)
+
+            if po_no_valid and receipt_date is not None and targets and int(po_no) not in existing_po_nos:
+                # This receipt would matter - a real commission trigger -
+                # but its PO isn't in the ledger yet (Master report for
+                # it hasn't been uploaded, or was uploaded after this
+                # AOR file by mistake). Leave it completely unrecorded,
+                # the same way an out-of-period receipt above is, so a
+                # LATER upload - even a re-upload of this exact same
+                # file, once the Master report for this PO exists -
+                # still picks it up. Recording it now would mark it
+                # "seen" forever via aor_receipts' own UNIQUE(
+                # acknowledgment_receipt_no), permanently losing this
+                # payment the moment upload order goes wrong.
+                result.review_flags.append(AorReviewFlag(
+                    ack_no, po_no,
+                    "This PO doesn't exist in the ledger yet - upload the Master report first; "
+                    "this receipt will be picked up automatically on a future AOR upload.",
+                ))
+                continue
+
             seen_this_upload.add(ack_no)
             receipt_details[ack_no] = {
                 "po_no": None,
@@ -303,7 +339,7 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                 "trigger_type": None,
             }
 
-            if not _is_positive_whole_number(po_no):
+            if not po_no_valid:
                 result.review_flags.append(AorReviewFlag(
                     ack_no, po_no, "Row has no valid PO No - skipped.",
                 ))
@@ -317,7 +353,6 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                 ))
                 continue
 
-            kind, numbers = _classify_reference(raw_row.get("Reference No"))
             if kind == "unrecognized":
                 result.review_flags.append(AorReviewFlag(
                     ack_no, po_no,
@@ -325,8 +360,11 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
                     f"pattern - not applied, needs a human to check.",
                 ))
 
-            targets = _targets_for_classification(kind, numbers)
-            if targets and po_no in existing_po_nos:
+            # targets non-empty here always means po_no is already in
+            # existing_po_nos - the branch above already sent the
+            # opposite case (a real trigger for a PO not yet in the
+            # ledger) down its own path without ever reaching here.
+            if targets:
                 receipt_details[ack_no]["trigger_type"] = ",".join(sorted(targets))
             for target in targets:
                 key = (po_no, target)
@@ -355,6 +393,12 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     for (po_no, target), receipt_date in paid_date_candidates.items():
         contract = conn.execute("SELECT * FROM contracts WHERE po_no = ?", (po_no,)).fetchone()
         if contract is None:
+            # Defensive only - every po_no reaching paid_date_candidates
+            # was already confirmed to be in existing_po_nos by the
+            # per-row loop above, which sends a PO not yet in the
+            # ledger down its own unrecorded, retryable path instead of
+            # ever getting here. Kept in case that invariant is ever
+            # broken by a future change.
             result.review_flags.append(AorReviewFlag(
                 None, po_no, "This PO doesn't exist in the ledger yet - upload the Master report first.",
             ))
