@@ -300,6 +300,76 @@ def test_annotate_aor_file_excludes_a_row_whose_purchase_statement_date_is_outsi
     assert rows == []
 
 
+def test_annotate_aor_file_surfaces_a_one_day_boundary_row_for_a_human_to_check(tmp_path):
+    """
+    The confirmed real-world Kenjin quirk: a receipt statemented one
+    calendar day after the chosen period ends (or before it starts)
+    doesn't silently disappear or get auto-included - it shows up on
+    its own "Boundary Payments (PO Date)" sheet instead, so a human can
+    decide whether it really belongs to this period. Never in "Valid
+    Payments (PO Date)" itself - that sheet's whole point is only ever
+    showing rows unambiguously in range.
+    """
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-BOUND-0001", "PO No": 90200,
+            "Customer ID": "CUSTBND1", "Customer Name": "Customer Bnd1",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 4, 1),  # one day after March
+            "Reference No": "TRF 10/08/2026 (INST 01/24)",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-BOUND-0002", "PO No": 90201,
+            "Customer ID": "CUSTBND2", "Customer Name": "Customer Bnd2",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 2, 28),  # one day before March
+            "Reference No": "PBL CYB0807 (INST 06/24)",
+        },
+        {
+            "No": 3, "Acknowledgment Receipt No": "RC-BOUND-0003", "PO No": 90202,
+            "Customer ID": "CUSTBND3", "Customer Name": "Customer Bnd3",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 4, 2),  # two days after March - too far
+            "Reference No": "TRF 10/08/2026 (INST 01/24)",
+        },
+    ])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path), "2026-03-01", "2026-03-31")
+
+    workbook = openpyxl.load_workbook(output_path)
+    valid = _valid_rows(workbook)
+    assert valid == []  # neither boundary row counts as unambiguously in range
+
+    boundary = _boundary_rows(workbook)
+    # Sorted by PO No ascending, same as every other sheet - 90200 (the
+    # day-after row) before 90201 (the day-before row).
+    assert [r[0] for r in boundary] == ["TRF 10/08/2026 (INST 01/24)", "PBL CYB0807 (INST 06/24)"]
+    assert boundary[0][1].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
+    assert boundary[1][1].fgColor.rgb == _YELLOW_FILL.fgColor.rgb
+
+
+def test_annotate_aor_file_boundary_sheet_excludes_non_triggering_rows(tmp_path):
+    """A boundary row that isn't a real commission trigger (a plain
+    STAMP DUTY, say) isn't worth surfacing here - matches "Valid
+    Payments (PO Date)"'s own scope, just one day wider."""
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-BOUND-0004", "PO No": 90203,
+        "Customer ID": "CUSTBND4", "Customer Name": "Customer Bnd4",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "Purchase Statement Date": datetime.date(2026, 4, 1),
+        "Reference No": "HLB 712873 STAMP DUTY",
+    }])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path), "2026-03-01", "2026-03-31")
+
+    boundary = _boundary_rows(openpyxl.load_workbook(output_path))
+    assert boundary == []
+
+
 def test_a_receipt_outside_the_chosen_period_is_left_for_a_later_upload(tmp_path):
     """
     The real Kenjin export is never cut on clean calendar-month
@@ -873,6 +943,20 @@ def _valid_rows(workbook):
     """Returns the "Valid Payments (PO Date)" sheet's data rows as
     (reference_no, fill)."""
     sheet = workbook["Valid Payments (PO Date)"]
+    ref_col = AOR_HEADERS.index("Reference No") + 1
+    rows = []
+    for row_num in range(2, sheet.max_row + 1):
+        cell = sheet.cell(row=row_num, column=ref_col)
+        if cell.value is None:
+            continue
+        rows.append((cell.value, cell.fill))
+    return rows
+
+
+def _boundary_rows(workbook):
+    """Same shape as _valid_rows, but for the "Boundary Payments (PO
+    Date)" sheet."""
+    sheet = workbook["Boundary Payments (PO Date)"]
     ref_col = AOR_HEADERS.index("Reference No") + 1
     rows = []
     for row_num in range(2, sheet.max_row + 1):

@@ -207,12 +207,12 @@ def download_aor_annotated(upload_id):
     """
     Regenerates and serves the annotated copy of the AOR file uploaded
     for this run (see app/aor.py's annotate_aor_file): every original
-    sheet untouched, plus "Payments (PO Date)" and "Valid Payments (PO
-    Date)" scoped to each row's own Purchase Statement Date, filtered
-    to the range given via po_period_start/po_period_end query params
-    (both required) - the same green/yellow highlighting a staff
-    member currently applies by hand while filtering this file. Built
-    fresh from the originally
+    sheet untouched, plus "Payments (PO Date)", "Valid Payments (PO
+    Date)", and "Boundary Payments (PO Date)" scoped to each row's own
+    Purchase Statement Date, filtered to the range given via
+    po_period_start/po_period_end query params (both required) - the
+    same green/yellow highlighting a staff member currently applies by
+    hand while filtering this file. Built fresh from the originally
     uploaded bytes on every request, same "generate on demand" shape
     as /download/<run_id> above, rather than caching the colored
     output. Keyed by the AOR upload itself (app.pipeline's

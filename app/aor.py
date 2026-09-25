@@ -533,7 +533,7 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
     object) - every original sheet left exactly as uploaded (a genuine
     1:1 copy for cross-referencing against what was actually uploaded,
     formulas and all - see the "reads the file twice" note below),
-    plus two new sheets built from the SAME raw rows, both scoped by
+    plus three new sheets built from the SAME raw rows, all scoped by
     each row's own Purchase Statement Date (po_period_start/
     po_period_end, ISO date strings, inclusive both ends) - a different
     axis from the row's own Acknowledgment Receipt Date (payments
@@ -565,10 +565,31 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
         colored yellow - confirmed against a real annotated sample,
         the exact colors and grouping the business already uses by
         hand.
+      - "Boundary Payments (PO Date)": a real, confirmed Kenjin quirk -
+        Kenjin sometimes statements a receipt the day after the PO was
+        actually purchased, which can roll it into the next calendar
+        month (a PO purchased 31 Aug can get Purchase Statement Date 1
+        Sep). That receipt then silently lands in the WRONG month's
+        "Valid Payments (PO Date)" - this month's report looks like
+        it's missing a payment that's actually sitting one day into
+        the next month's. Rather than have the system guess which
+        month a boundary row "really" belongs in (this file alone
+        can't tell - only the ledger's own PO Date can, and even that's
+        sometimes not uploaded yet), this sheet surfaces every row
+        whose Purchase Statement Date is exactly one day before
+        po_period_start or one day after po_period_end AND would
+        otherwise have qualified for "Valid Payments (PO Date)" (same
+        green/yellow rule) - so a human can glance at it and decide
+        whether it belongs to this period. Deliberately NOT
+        auto-included in either sheet above, and deliberately not
+        auto-resolved by looking anything up in the ledger either -
+        this is a case where only a human can judge which period a
+        boundary row really belongs to.
 
-    Both new sheets are sorted by PO No ascending (20260299, 20260300,
-    ...) rather than the file's own row order, so a PO's group of rows
-    sits together and each sheet reads top to bottom in order.
+    All three new sheets are sorted by PO No ascending (20260299,
+    20260300, ...) rather than the file's own row order, so a PO's
+    group of rows sits together and each sheet reads top to bottom in
+    order.
 
     Deliberately NOT scoped to "only the receipts this specific upload
     newly introduced" - every row that's actually in this file and
@@ -607,11 +628,19 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
             if kind == "full_payment":
                 full_payment_pos.add(int(po_no))
 
-    # Second pass: build both new sheets' rows in one walk through the
-    # file, in the order rows appear - same spirit as a human scrolling
-    # through it top to bottom and filtering as they go.
+    # One day outside each end of the chosen range - see "Boundary
+    # Payments (PO Date)" in the docstring above for why exactly one
+    # day: it's the confirmed real-world drift (Kenjin sometimes
+    # statements a receipt the calendar day after the actual PO date).
+    day_before_start = (datetime.date.fromisoformat(po_period_start) - datetime.timedelta(days=1)).isoformat()
+    day_after_end = (datetime.date.fromisoformat(po_period_end) + datetime.timedelta(days=1)).isoformat()
+
+    # Second pass: build all three new sheets' rows in one walk through
+    # the file, in the order rows appear - same spirit as a human
+    # scrolling through it top to bottom and filtering as they go.
     headers = None
     payment_rows = []  # list of (po_no, row_values, fill_or_None)
+    boundary_rows = []  # same shape, but for the one-day-outside-the-range case
     for sheet in aor_sheets:
         header_row_num = _find_header_row(sheet)
         if header_row_num is None:
@@ -622,7 +651,9 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
         for raw_row in _read_aor_rows(sheet):
             po_no = raw_row.get("PO No")
             statement_date = _to_iso_date(raw_row.get("Purchase Statement Date"))
-            if statement_date is None or not (po_period_start <= statement_date <= po_period_end):
+            in_period = statement_date is not None and po_period_start <= statement_date <= po_period_end
+            on_boundary = statement_date in (day_before_start, day_after_end)
+            if not in_period and not on_boundary:
                 continue
 
             kind, numbers = _classify_reference(raw_row.get("Reference No"))
@@ -634,12 +665,21 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
                 fill = _GREEN_FILL
             trigger_type = ",".join(sorted(targets)) if targets else None
             values = [raw_row.get(h) for h in sheet_headers] + [trigger_type, os.path.basename(file_path)]
-            payment_rows.append((po_no, values, fill))
+
+            if in_period:
+                payment_rows.append((po_no, values, fill))
+            elif fill is not None:
+                # Boundary Payments only ever shows rows that would
+                # already have qualified for Valid Payments - see the
+                # docstring above for why an unrecognized/non-triggering
+                # row near the edge isn't worth surfacing here.
+                boundary_rows.append((po_no, values, fill))
 
     # Sorted by PO No ascending (20260299, 20260300, ...) rather than
     # the file's own row order, so a PO's group of rows is easy to
     # find and everything reads in one consistent order.
     payment_rows.sort(key=lambda entry: entry[0] if _is_positive_whole_number(entry[0]) else float("inf"))
+    boundary_rows.sort(key=lambda entry: entry[0] if _is_positive_whole_number(entry[0]) else float("inf"))
     valid_rows = [entry for entry in payment_rows if entry[2] is not None]
 
     output_workbook = openpyxl.load_workbook(file_path)  # untouched - this is what gets kept as-is
@@ -663,5 +703,6 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
     if headers is not None:
         _write_sheet("Payments (PO Date)", payment_rows)
         _write_sheet("Valid Payments (PO Date)", valid_rows)
+        _write_sheet("Boundary Payments (PO Date)", boundary_rows)
 
     output_workbook.save(output)
