@@ -18,11 +18,13 @@ business, not guessed):
     Only installment 1 and 6 matter for commission (the fixed release
     points - see rules.py); any other installment number is recorded
     (so the receipt is never reprocessed) but triggers nothing.
-  - No INST tag at all: "FULL PAYMENT" or "BALANCE PAYMENT" means this
-    receipt completes the full price. Plain "DEPOSIT" or "PARTIAL
-    PAYMENT" (no tag, not the completing one) and "STAMP DUTY" are
-    recognized but non-triggering - a step along the way, not a
-    commission event.
+  - No INST tag at all: "FULL PAYMENT", "BALANCE PAYMENT", or "EARLY
+    SETTLEMENT" all mean this receipt completes the full price (staff
+    confirmed "early settlement" = the customer paid off the whole
+    remaining balance ahead of schedule, not just one installment).
+    Plain "DEPOSIT" or "PARTIAL PAYMENT" (no tag, not the completing
+    one) and "STAMP DUTY" are recognized but non-triggering - a step
+    along the way, not a commission event.
   - Anything else doesn't match a known pattern and gets flagged for a
     human to look at, rather than silently guessed at or dropped.
 
@@ -160,7 +162,11 @@ def _classify_reference(reference_text):
         if numbers:
             return ("installments", numbers)
 
-    if "FULL PAYMENT" in upper or "BALANCE PAYMENT" in upper:
+    # "EARLY SETTLEMENT" (no INST tag) means the customer paid off the
+    # whole remaining balance ahead of schedule - confirmed with the
+    # business - same completing-the-full-price meaning as "FULL
+    # PAYMENT"/"BALANCE PAYMENT", just different wording.
+    if "FULL PAYMENT" in upper or "BALANCE PAYMENT" in upper or "EARLY SETTLEMENT" in upper:
         return ("full_payment", None)
     # "PATRIAL PAYMENT" is a real, recurring typo in the actual export
     # (confirmed against a real sample) - same meaning as "PARTIAL

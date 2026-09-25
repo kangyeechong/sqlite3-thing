@@ -37,6 +37,10 @@ def _db_path(tmp_path):
     # No tag at all: FULL/BALANCE PAYMENT completes the full price.
     ("HLB 712873 FULL PAYMENT", ("full_payment", None)),
     ("G M0301 BALANCE PAYMENT", ("full_payment", None)),
+    # "EARLY SETTLEMENT" (no tag) = paid off the whole remaining
+    # balance ahead of schedule - confirmed with the business, same
+    # completing-the-full-price meaning as FULL/BALANCE PAYMENT.
+    ("TRF 27/08/2026 EARLY SETTLEMENT", ("full_payment", None)),
     # No tag, not the completing payment: recognized, non-triggering.
     ("HLB 712873 STAMP DUTY", ("skip", None)),
     ("G M4176 DEPOSIT", ("skip", None)),
@@ -96,6 +100,50 @@ def test_aor_fills_a_blank_paid_date_and_triggers_detection(tmp_path):
     ).fetchone()["first_installment_paid_date"]
     conn.close()
     assert paid_date == "2026-08-10"
+
+
+def test_aor_early_settlement_fills_full_settlement_paid_date_and_triggers_full_payment(tmp_path):
+    """
+    "EARLY SETTLEMENT" (no INST tag) means the customer paid off the
+    whole remaining balance ahead of schedule - confirmed with the
+    business - so it must fill full_settlement_paid_date and raise the
+    full_payment commission, exactly like a "FULL PAYMENT"/"BALANCE
+    PAYMENT" reference does.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80005, "Customer ID": "CUSTA5", "Customer Name": "Customer A5",
+        "Niche/Tablet Price (RM)": 10000,  # 15% = 1500.00
+        "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-TEST-0005",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 27),
+        "PO No": 80005, "Customer ID": "CUSTA5", "Customer Name": "Customer A5",
+        "Reference No": "TRF 27/08/2026 EARLY SETTLEMENT",
+    }])
+    # Full-payment commission only becomes releasable
+    # COOLING_OFF_DAYS_BEFORE_RELEASE days after the paid date - run
+    # detection well past that.
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 9, 3))
+
+    assert result["import_result"].receipts_imported == 1
+    assert result["import_result"].paid_dates_written == 1
+    assert result["import_result"].review_flags == []
+    assert result["raised_events"][0]["po_no"] == 80005
+    assert result["raised_events"][0]["trigger_type"] == "full_payment"
+    assert result["raised_events"][0]["amount"] == 1500.0
+
+    conn = get_connection(db_path)
+    paid_date = conn.execute(
+        "SELECT full_settlement_paid_date FROM contracts WHERE po_no = 80005"
+    ).fetchone()["full_settlement_paid_date"]
+    conn.close()
+    assert paid_date == "2026-08-27"
 
 
 def test_aor_never_overwrites_an_existing_paid_date(tmp_path):
@@ -898,6 +946,27 @@ def test_annotate_aor_file_colors_a_full_payment_group_green(tmp_path):
     assert [r[0] for r in rows] == ["C M6243 PATRIAL PAYMENT", "C V5135 BALANCE PAYMENT"]
     assert rows[0][1].fgColor.rgb == _GREEN_FILL.fgColor.rgb
     assert rows[1][1].fgColor.rgb == _GREEN_FILL.fgColor.rgb
+
+
+def test_annotate_aor_file_colors_an_early_settlement_row_green(tmp_path):
+    """Same full-payment-completion treatment as a "FULL PAYMENT"/
+    "BALANCE PAYMENT" row - see _classify_reference."""
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-A-0093", "PO No": 90003,
+        "Customer ID": "CUSTB3", "Customer Name": "Customer B3",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 27),
+        "Purchase Statement Date": datetime.date(2026, 1, 1),
+        "Reference No": "TRF 27/08/2026 EARLY SETTLEMENT",
+    }])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path), "2026-01-01", "2026-12-31")
+
+    workbook = openpyxl.load_workbook(output_path)
+    rows = _valid_rows(workbook)
+    assert [r[0] for r in rows] == ["TRF 27/08/2026 EARLY SETTLEMENT"]
+    assert rows[0][1].fgColor.rgb == _GREEN_FILL.fgColor.rgb
 
 
 def test_annotate_aor_file_colors_installment_1_and_6_yellow(tmp_path):
