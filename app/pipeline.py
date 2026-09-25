@@ -8,6 +8,7 @@ import contextlib
 import datetime
 import os
 
+from .agencies import create_agency as _create_agency, list_agencies as _list_agencies, update_agency as _update_agency
 from .aor import import_aor_report, void_aor_trigger as _void_aor_trigger
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
@@ -300,3 +301,29 @@ def void_aor_trigger(db_path, po_no, trigger_type, voided_by_user, reason):
         voided = _void_aor_trigger(conn, po_no, trigger_type, voided_by_user, reason)
         conn.commit()
         return voided
+
+
+def list_agencies(db_path):
+    """Every agency on file, alphabetical by code - see
+    app.agencies.list_agencies."""
+    with _connect(db_path) as conn:
+        return _list_agencies(conn)
+
+
+def create_agency(db_path, agency_code, name, format_key):
+    """Adds a brand-new agency - see app.agencies.create_agency. Raises
+    ValueError (caught by the web layer) on a duplicate code or an
+    unrecognized format."""
+    with _connect(db_path) as conn:
+        _create_agency(conn, agency_code, name, format_key)
+        conn.commit()
+
+
+def update_agency(db_path, current_agency_code, new_agency_code, name, format_key):
+    """Updates an existing agency's name/format/code - see
+    app.agencies.update_agency. Raises ValueError (caught by the web
+    layer) if current_agency_code doesn't exist, new_agency_code
+    collides with a different agency, or format_key isn't recognized."""
+    with _connect(db_path) as conn:
+        _update_agency(conn, current_agency_code, new_agency_code, name, format_key)
+        conn.commit()

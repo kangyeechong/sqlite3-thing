@@ -769,3 +769,153 @@ def test_void_aor_trigger_success_lets_a_corrected_reupload_reapply(client, tmp_
     assert b"Review &amp; confirm" in reupload_response.data
 
 
+def _create_agency(client, agency_code, name="Test Agency", format_key="xemp"):
+    token = _csrf_token(client, "/agencies")
+    return client.post(
+        "/agencies/new",
+        data={"csrf_token": token, "agency_code": agency_code, "name": name, "format_key": format_key},
+        follow_redirects=True,
+    )
+
+
+def _edit_agency(client, current_code, new_code=None, name="Edited Agency", format_key="xemp"):
+    token = _csrf_token(client, f"/agencies/{current_code}/edit")
+    return client.post(
+        f"/agencies/{current_code}/edit",
+        data={
+            "csrf_token": token, "agency_code": new_code if new_code is not None else current_code,
+            "name": name, "format_key": format_key,
+        },
+        follow_redirects=True,
+    )
+
+
+def test_agencies_page_requires_login(client):
+    response = client.get("/agencies")
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_creating_an_agency_shows_it_on_the_list(client):
+    _login(client)
+    response = _create_agency(client, "AC400", name="Brand New Agency", format_key="lachesis")
+    assert response.status_code == 200
+    assert b"added" in response.data.lower()
+    assert b"AC400" in response.data
+    assert b"Brand New Agency" in response.data
+    assert b"Full Payout, Agent Breakdown (Lachesis-style)" in response.data
+
+
+def test_creating_an_agency_without_a_code_is_rejected(client):
+    _login(client)
+    response = _create_agency(client, "", name="No Code Agency")
+    assert response.status_code == 200
+    assert b"Agency Code is required" in response.data
+
+
+def test_creating_an_agency_without_a_name_is_rejected(client):
+    _login(client)
+    response = _create_agency(client, "AC401", name="")
+    assert response.status_code == 200
+    assert b"Name is required" in response.data
+
+
+def test_creating_an_agency_with_an_invalid_format_is_rejected(client):
+    _login(client)
+    token = _csrf_token(client, "/agencies")
+    response = client.post(
+        "/agencies/new",
+        data={"csrf_token": token, "agency_code": "AC402", "name": "Bad Format", "format_key": "nonsense"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"Choose a valid format" in response.data
+
+
+def test_creating_an_agency_with_a_duplicate_code_is_rejected(client):
+    _login(client)
+    _create_agency(client, "AC403", name="First")
+    response = _create_agency(client, "AC403", name="Second")
+    assert response.status_code == 200
+    assert b"already exists" in response.data
+
+
+def test_agencies_route_without_a_valid_csrf_token_is_rejected(client):
+    _login(client)
+    response = client.post(
+        "/agencies/new",
+        data={"csrf_token": "made-up-token", "agency_code": "AC404", "name": "No CSRF", "format_key": "xemp"},
+    )
+    assert response.status_code == 400
+
+
+def test_edit_agency_page_requires_login(client):
+    response = client.get("/agencies/AC001/edit")
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_edit_agency_page_404s_for_an_unknown_code(client):
+    _login(client)
+    response = client.get("/agencies/DOES-NOT-EXIST/edit")
+    assert response.status_code == 404
+
+
+def test_edit_agency_page_preselects_the_current_format(client):
+    _login(client)
+    _create_agency(client, "AC405", name="AW-Style Agency", format_key="aw")
+    page = client.get("/agencies/AC405/edit")
+    assert page.status_code == 200
+    assert b'value="aw" selected' in page.data
+
+
+def test_editing_an_agencys_name_and_format_without_changing_the_code(client):
+    _login(client)
+    _create_agency(client, "AC406", name="Original Name", format_key="xemp")
+
+    response = _edit_agency(client, "AC406", name="Updated Name", format_key="aw")
+    assert response.status_code == 200
+    assert b"updated" in response.data.lower()
+    assert b"Updated Name" in response.data
+    assert b"Agency/Agent Split (AW Consultancy-style)" in response.data
+
+
+def test_renaming_an_agencys_code_moves_its_contracts(client, app, tmp_path):
+    """The core safety property, exercised through the actual HTTP
+    layer: an agency's contracts must still be tied to it under its new
+    code, not orphaned or left under the old one."""
+    _login(client)
+    _create_agency(client, "AC407", name="Renaming Agency", format_key="xemp")
+
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 70090, "Customer ID": "CUSTREN1", "Customer Name": "Rename Customer",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC407",
+    }])
+    _upload(client, xlsx_master)
+
+    response = _edit_agency(client, "AC407", new_code="AC407-NEW", name="Renaming Agency", format_key="xemp")
+    assert response.status_code == 200
+    assert b"AC407-NEW" in response.data
+
+    page = client.get("/agencies/AC407-NEW/edit")
+    assert page.status_code == 200
+    old_page = client.get("/agencies/AC407/edit")
+    assert old_page.status_code == 404
+
+    conn = get_connection(app.config["DB_PATH"])
+    moved_agency_code = conn.execute("SELECT agency_code FROM contracts WHERE po_no = 70090").fetchone()["agency_code"]
+    conn.close()
+    assert moved_agency_code == "AC407-NEW"
+
+
+def test_renaming_an_agency_to_a_code_already_in_use_is_rejected(client):
+    _login(client)
+    _create_agency(client, "AC408", name="Agency Eight")
+    _create_agency(client, "AC409", name="Agency Nine")
+
+    response = _edit_agency(client, "AC408", new_code="AC409", name="Agency Eight")
+    assert response.status_code == 200
+    assert b"already exists" in response.data
+
+

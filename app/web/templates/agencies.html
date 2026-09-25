@@ -1,0 +1,42 @@
+{% extends "base.html" %}
+{% block title %}Agencies{% endblock %}
+{% block content %}
+  <h1>Agencies</h1>
+  <p class="muted">Every agency on file, and which commission report format it follows. Changing an agency's format only affects commissions detected from now on - anything already raised or confirmed keeps the numbers it was given at the time.</p>
+
+  {% if agencies %}
+    <table>
+      <tr><th>Code</th><th>Name</th><th>Format</th><th></th></tr>
+      {% for agency in agencies %}
+        <tr>
+          <td>{{ agency.agency_code }}</td>
+          <td>{{ agency.name or "" }}</td>
+          <td>{{ agency.format_label }}</td>
+          <td><a href="{{ url_for('web.edit_agency', agency_code=agency.agency_code) }}">Edit</a></td>
+        </tr>
+      {% endfor %}
+    </table>
+  {% else %}
+    <p class="muted">No agencies on file yet.</p>
+  {% endif %}
+
+  <h2>Add an agency</h2>
+  <p class="muted">The Code is what every Master report and AOR upload actually matches against - the Name is just for humans reading this page.</p>
+  <form method="post" action="{{ url_for('web.create_agency_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Agency Code
+      <input type="text" name="agency_code" required>
+    </label>
+    <label>Name
+      <input type="text" name="name" required>
+    </label>
+    <label>Format
+      <select name="format_key" required>
+        {% for key, fmt in agency_formats.items() %}
+          <option value="{{ key }}">{{ fmt.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="button" type="submit">Add Agency</button>
+  </form>
+{% endblock %}

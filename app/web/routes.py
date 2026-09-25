@@ -19,11 +19,13 @@ from flask import (
 )
 from werkzeug.utils import secure_filename
 
+from ..agencies import AGENCY_FORMATS, format_key_for_agency
 from ..aor import annotate_aor_file
 from ..db.connection import get_connection
 from ..pipeline import (
-    confirm_events, list_aor_uploads, list_confirmed_runs, list_runs_with_pending_events,
-    load_review, process_aor_upload, process_upload, void_aor_trigger, void_event,
+    confirm_events, create_agency, list_agencies, list_aor_uploads, list_confirmed_runs,
+    list_runs_with_pending_events, load_review, process_aor_upload, process_upload, update_agency,
+    void_aor_trigger, void_event,
 )
 from ..report import TRIGGER_LABELS, generate_commission_run_report, generate_period_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
@@ -408,6 +410,98 @@ def void_aor_trigger_route():
         flash(f"Couldn't void that - no AOR receipt found for PO {po_no}'s {TRIGGER_LABELS[trigger_type]}.")
 
     return redirect(url_for("web.reports"))
+
+
+def _agency_display_rows(db_path):
+    """Every agency, plus the human-readable label for its format -
+    computed here (not in the template) so agencies.html stays a plain
+    listing. "Custom" only ever shows for a (commission_split_type,
+    splits_by_agent) combination that predates the three named formats
+    - nothing created or edited through this page can produce it."""
+    rows = []
+    for row in list_agencies(db_path):
+        format_key = format_key_for_agency(row)
+        rows.append({
+            "agency_code": row["agency_code"],
+            "name": row["name"],
+            "format_label": AGENCY_FORMATS[format_key]["label"] if format_key else "Custom",
+        })
+    return rows
+
+
+@bp.route("/agencies")
+@login_required
+def agencies():
+    return render_template(
+        "agencies.html", agencies=_agency_display_rows(current_app.config["DB_PATH"]),
+        agency_formats=AGENCY_FORMATS,
+    )
+
+
+@bp.route("/agencies/new", methods=["POST"])
+@login_required
+def create_agency_route():
+    validate_csrf_token(request.form.get("csrf_token"))
+
+    agency_code = (request.form.get("agency_code") or "").strip()
+    name = (request.form.get("name") or "").strip()
+    format_key = request.form.get("format_key", "")
+
+    if not agency_code:
+        flash("Agency Code is required.")
+    elif not name:
+        flash("Name is required.")
+    elif format_key not in AGENCY_FORMATS:
+        flash("Choose a valid format.")
+    else:
+        try:
+            create_agency(current_app.config["DB_PATH"], agency_code, name, format_key)
+        except ValueError as exc:
+            flash(str(exc))
+        else:
+            flash(f"Agency {agency_code!r} added.")
+
+    return redirect(url_for("web.agencies"))
+
+
+@bp.route("/agencies/<agency_code>/edit", methods=["GET", "POST"])
+@login_required
+def edit_agency(agency_code):
+    if request.method == "GET":
+        agency = next(
+            (r for r in list_agencies(current_app.config["DB_PATH"]) if r["agency_code"] == agency_code), None,
+        )
+        if agency is None:
+            abort(404, description=f"No agency with code {agency_code!r}.")
+        return render_template(
+            "agency_edit.html", agency=agency, agency_formats=AGENCY_FORMATS,
+            current_format_key=format_key_for_agency(agency),
+        )
+
+    validate_csrf_token(request.form.get("csrf_token"))
+
+    new_agency_code = (request.form.get("agency_code") or "").strip()
+    name = (request.form.get("name") or "").strip()
+    format_key = request.form.get("format_key", "")
+
+    if not new_agency_code:
+        flash("Agency Code is required.")
+        return redirect(url_for("web.edit_agency", agency_code=agency_code))
+    if not name:
+        flash("Name is required.")
+        return redirect(url_for("web.edit_agency", agency_code=agency_code))
+    if format_key not in AGENCY_FORMATS:
+        flash("Choose a valid format.")
+        return redirect(url_for("web.edit_agency", agency_code=agency_code))
+
+    try:
+        update_agency(current_app.config["DB_PATH"], agency_code, new_agency_code, name, format_key)
+    except ValueError as exc:
+        flash(str(exc))
+        return redirect(url_for("web.edit_agency", agency_code=agency_code))
+
+    flash(f"Agency {new_agency_code!r} updated - only affects commissions detected from now on.")
+    return redirect(url_for("web.agencies"))
 
 
 @bp.route("/download/<int:run_id>")

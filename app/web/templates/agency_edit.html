@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block title %}Edit Agency{% endblock %}
+{% block content %}
+  <h1>Edit Agency</h1>
+  <p class="muted">Only affects commissions detected from now on - anything already raised or confirmed keeps the numbers it was given at the time. Changing the Code moves every one of this agency's contracts over to the new code.</p>
+  <form method="post" action="{{ url_for('web.edit_agency', agency_code=agency.agency_code) }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>Agency Code
+      <input type="text" name="agency_code" value="{{ agency.agency_code }}" required>
+    </label>
+    <label>Name
+      <input type="text" name="name" value="{{ agency.name or '' }}" required>
+    </label>
+    <label>Format
+      <select name="format_key" required>
+        {% for key, fmt in agency_formats.items() %}
+          <option value="{{ key }}"{% if key == current_format_key %} selected{% endif %}>{{ fmt.label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="button" type="submit">Save</button>
+  </form>
+
+  <p><a href="{{ url_for('web.agencies') }}">Back to Agencies</a></p>
+{% endblock %}
