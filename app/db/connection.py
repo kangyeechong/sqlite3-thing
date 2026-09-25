@@ -106,6 +106,8 @@ _MIGRATIONS = [
      "ALTER TABLE aor_receipts ADD COLUMN voided_by_user TEXT", None),
     ("aor_receipts", "void_reason",
      "ALTER TABLE aor_receipts ADD COLUMN void_reason TEXT", None),
+    ("aor_uploads", "po_months",
+     "ALTER TABLE aor_uploads ADD COLUMN po_months TEXT", None),
 ]
 
 # For a brand-new table (not a new column on an existing one) - same

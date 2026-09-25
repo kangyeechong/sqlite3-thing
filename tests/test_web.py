@@ -594,6 +594,36 @@ def test_past_reports_lists_aor_uploads_even_with_nothing_newly_due(client, tmp_
     assert download_response.status_code == 200
 
 
+def test_past_aor_uploads_shows_the_po_months_column(client, tmp_path):
+    """The team's own request: next to each AOR file, show which PO
+    purchase months it covers, so staff don't have to open it to check."""
+    _login(client)
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-WEBMONTH-0001", "PO No": 99996,
+            "Customer ID": "CUSTWEBM1", "Customer Name": "Web Month Customer 1",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 1, 5),
+            "Reference No": "HLB 000000 STAMP DUTY",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-WEBMONTH-0002", "PO No": 99995,
+            "Customer ID": "CUSTWEBM2", "Customer Name": "Web Month Customer 2",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 3, 20),
+            "Reference No": "HLB 000000 STAMP DUTY",
+        },
+    ])
+    _upload_aor(client, xlsx_aor, filename="months_test.xlsx")
+
+    page = client.get("/reports")
+    assert page.status_code == 200
+    assert b"PO Months" in page.data
+    assert b"1/2026, 3/2026" in page.data
+
+
 def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
     _login(client)
 

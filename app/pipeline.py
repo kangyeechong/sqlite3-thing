@@ -9,7 +9,7 @@ import datetime
 import os
 
 from .agencies import create_agency as _create_agency, list_agencies as _list_agencies, update_agency as _update_agency
-from .aor import import_aor_report, void_aor_trigger as _void_aor_trigger
+from .aor import import_aor_report, po_months_summary as _po_months_summary, void_aor_trigger as _void_aor_trigger
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
 from .commission import (
@@ -123,10 +123,10 @@ def process_aor_upload(db_path, file_path, run_date=None, created_by_user=None,
             file_bytes = f.read()
         upload_cursor = conn.execute(
             "INSERT INTO aor_uploads (commission_run_id, filename, file_bytes, uploaded_at, "
-            "period_start, period_end) VALUES (?, ?, ?, ?, ?, ?)",
+            "period_start, period_end, po_months) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 None, os.path.basename(file_path), file_bytes, datetime.datetime.now().isoformat(),
-                period_start, period_end,
+                period_start, period_end, _po_months_summary(file_path),
             ),
         )
         aor_upload_id = upload_cursor.lastrowid
@@ -250,7 +250,7 @@ def list_aor_uploads(db_path):
     """
     with _connect(db_path) as conn:
         return conn.execute(
-            "SELECT id, filename, uploaded_at FROM aor_uploads ORDER BY uploaded_at DESC, id DESC"
+            "SELECT id, filename, uploaded_at, po_months FROM aor_uploads ORDER BY uploaded_at DESC, id DESC"
         ).fetchall()
 
 

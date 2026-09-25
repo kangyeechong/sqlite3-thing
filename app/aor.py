@@ -442,6 +442,39 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     return result
 
 
+def po_months_summary(file_path):
+    """
+    Every distinct calendar month among this file's own Purchase
+    Statement Date column, across every AOR-shaped sheet, formatted as
+    "M/YYYY" and sorted chronologically (e.g. "1/2026, 2/2026,
+    3/2026") - what "Past AOR uploads" shows next to each file so staff
+    can tell which PO purchase months it covers without opening it and
+    filtering by hand. Same Purchase Statement Date axis
+    annotate_aor_file already scopes by - see its docstring for why
+    that's a different axis from the file's own Acknowledgment Receipt
+    Date (payments received this month routinely settle POs purchased,
+    and thus statemented, in an earlier one).
+
+    Computed once at upload time (see app.pipeline.process_aor_upload)
+    and stored on the aor_uploads row rather than recomputed on every
+    "Past Reports" page view - the same reasoning period_start/
+    period_end are already stored there for.
+    """
+    workbook = openpyxl.load_workbook(file_path, data_only=True)
+    aor_sheets = [sheet for sheet in workbook.worksheets if _is_aor_shaped(sheet)]
+
+    months = set()
+    for sheet in aor_sheets:
+        for raw_row in _read_aor_rows(sheet):
+            statement_date = _to_iso_date(raw_row.get("Purchase Statement Date"))
+            if statement_date is None:
+                continue
+            year, month, _day = statement_date.split("-")
+            months.add((int(year), int(month)))
+
+    return ", ".join(f"{month}/{year}" for year, month in sorted(months))
+
+
 def void_aor_trigger(conn, po_no, trigger_type, voided_by_user, reason):
     """
     Voids one PO's whole trigger (installment_1, installment_6, or

@@ -61,11 +61,12 @@
   <p class="muted">Every AOR file ever uploaded, whether or not it happened to raise anything new that time - its annotated copy stays downloadable here. Pick the PO purchase month you want the annotated copy narrowed to.</p>
   {% if aor_uploads %}
     <table>
-      <tr><th>Uploaded At</th><th>Source File</th><th></th></tr>
+      <tr><th>Uploaded At</th><th>Source File</th><th>PO Months</th><th></th></tr>
       {% for upload in aor_uploads %}
         <tr{% if loop.index > 5 %} class="hidden-row" style="display:none"{% endif %}>
           <td>{{ upload.uploaded_at }}</td>
           <td>{{ upload.filename or "" }}</td>
+          <td>{{ upload.po_months or "" }}</td>
           <td>
             <form method="get" action="{{ url_for('web.download_aor_annotated', upload_id=upload.id) }}">
               <label>PO period start <input type="date" name="po_period_start" required></label>
@@ -77,7 +78,7 @@
       {% endfor %}
       {% if aor_uploads|length > 5 %}
         <tr>
-          <td colspan="3">
+          <td colspan="4">
             <button type="button" class="button" onclick="this.closest('table').querySelectorAll('.hidden-row').forEach(function(r){r.style.display='table-row';}); this.closest('tr').style.display='none';">Show {{ aor_uploads|length - 5 }} more</button>
           </td>
         </tr>

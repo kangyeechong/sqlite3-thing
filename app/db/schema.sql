@@ -299,7 +299,16 @@ CREATE TABLE IF NOT EXISTS aor_uploads (
     -- Filtered sheet is the CORRECT answer" - those look identical by
     -- receipt count alone but need opposite behavior.
     period_start       TEXT,
-    period_end         TEXT
+    period_end         TEXT,
+    -- Every distinct PO purchase month this file's own Purchase
+    -- Statement Date column covers, e.g. "1/2026, 2/2026, 3/2026" -
+    -- see app.aor.po_months_summary. Computed once at upload time and
+    -- stored here (not recomputed on every "Past Reports" page view)
+    -- so staff can tell which months a file covers without opening it.
+    -- NULL for an upload that predates this feature - left blank
+    -- rather than backfilled, same as every other additive column
+    -- here.
+    po_months          TEXT
 );
 
 -- Marks which multi-statement migrations (see app/db/connection.py)

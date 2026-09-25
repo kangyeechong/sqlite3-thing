@@ -14,7 +14,9 @@ import pytest
 
 import openpyxl
 
-from app.aor import _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file, void_aor_trigger
+from app.aor import (
+    _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file, po_months_summary, void_aor_trigger,
+)
 from app.db.connection import get_connection
 from app.pipeline import confirm_events, load_review, process_aor_upload, process_upload
 from tests.helpers import AOR_HEADERS, build_aor_report, build_master_report, confirm_all_pending
@@ -705,6 +707,78 @@ def test_full_pipeline_aor_paid_date_flows_through_to_confirmed_report(tmp_path)
     values = [c.value for row in sheet.iter_rows() for c in row]
     assert 700.0 in values
     assert 800.0 in values
+
+
+# --- po_months_summary: which PO purchase months a file covers ---------
+
+def test_po_months_summary_lists_distinct_months_chronologically(tmp_path):
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-MONTH-0001", "PO No": 90300,
+            "Customer ID": "CUSTM1", "Customer Name": "Customer M1",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 3, 15),
+            "Reference No": "TRF 10/08/2026 (INST 01/24)",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-MONTH-0002", "PO No": 90301,
+            "Customer ID": "CUSTM2", "Customer Name": "Customer M2",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 1, 2),
+            "Reference No": "TRF 10/08/2026 (INST 01/24)",
+        },
+        {
+            "No": 3, "Acknowledgment Receipt No": "RC-MONTH-0003", "PO No": 90302,
+            "Customer ID": "CUSTM3", "Customer Name": "Customer M3",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 2, 20),
+            "Reference No": "TRF 10/08/2026 (INST 01/24)",
+        },
+        {
+            # Same month as row 1 - must only appear once.
+            "No": 4, "Acknowledgment Receipt No": "RC-MONTH-0004", "PO No": 90303,
+            "Customer ID": "CUSTM4", "Customer Name": "Customer M4",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "Purchase Statement Date": datetime.date(2026, 3, 28),
+            "Reference No": "TRF 10/08/2026 (INST 01/24)",
+        },
+    ])
+
+    assert po_months_summary(str(xlsx_aor)) == "1/2026, 2/2026, 3/2026"
+
+
+def test_po_months_summary_ignores_rows_with_no_purchase_statement_date(tmp_path):
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-MONTH-0005", "PO No": 90304,
+        "Customer ID": "CUSTM5", "Customer Name": "Customer M5",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        # no Purchase Statement Date
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+
+    assert po_months_summary(str(xlsx_aor)) == ""
+
+
+def test_process_aor_upload_stores_po_months_on_the_upload_row(tmp_path):
+    db_path = _db_path(tmp_path)
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-MONTH-0006", "PO No": 90305,
+        "Customer ID": "CUSTM6", "Customer Name": "Customer M6",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "Purchase Statement Date": datetime.date(2026, 4, 12),
+        "Reference No": "HLB 000000 STAMP DUTY",  # non-triggering is fine - this only tests po_months
+    }])
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+
+    conn = get_connection(db_path)
+    stored = conn.execute(
+        "SELECT po_months FROM aor_uploads WHERE id = ?", (result["aor_upload_id"],)
+    ).fetchone()
+    conn.close()
+    assert stored["po_months"] == "4/2026"
 
 
 # --- void_aor_trigger: correcting a bad AOR receipt -----------------------
