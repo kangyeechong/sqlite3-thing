@@ -740,6 +740,104 @@ def test_no_split_agency_sheet_is_one_flat_table(tmp_path):
     assert len(ac001_rows) == 2  # one flat table, both agents mixed together
 
 
+def test_agency_with_a_name_uses_it_as_the_sheet_title(tmp_path):
+    """
+    Once staff give an agency a human-readable Name (via the Agencies
+    tab), the report's own sheet tab and title line show that name
+    instead of the raw agency_code - but the per-row "Agency Code"
+    column (mirroring the real Kenjin file) still shows the true code,
+    since that's a real data field, not a display label.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60030, "Customer ID": "CUST230", "Customer Name": "Customer 230",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": settlement_date,
+        "Agency Code": "AC500", "FCC/Agent": "Staff Z",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    conn = get_connection(db_path)
+    conn.execute("UPDATE agencies SET name = 'XEMP' WHERE agency_code = 'AC500'")
+    conn.commit()
+    conn.close()
+
+    report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert "XEMP" in workbook.sheetnames
+    assert "AC500" not in workbook.sheetnames
+
+    _, xemp_rows = _find_table_rows(workbook["XEMP"])
+    assert xemp_rows[0]["Agency Code"] == "AC500"
+
+
+def test_naming_one_aw_consultancy_sub_code_does_not_rename_the_group_sheet(tmp_path):
+    """
+    A multi-code agency group (agency_group set, e.g. AW Consultancy's
+    AC108-01/-02/-03) always keeps showing its own group label - an
+    individual sub-code's own Name is per-code data that doesn't apply
+    to the combined group sheet's identity.
+    """
+    today = datetime.date.today()
+    settlement_date = today - datetime.timedelta(days=6)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60031, "Customer ID": "CUST231", "Customer Name": "Customer 231",
+        "Niche/Tablet Price (RM)": 10000,
+        "Full Settlement Paid Date": settlement_date,
+        "Agency Code": "AC108-01", "FCC/Agent": "Agent AW-X",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    conn = get_connection(db_path)
+    conn.execute("UPDATE agencies SET name = 'Someone Personal Name' WHERE agency_code = 'AC108-01'")
+    conn.commit()
+    conn.close()
+
+    report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert "AW Consultancy" in workbook.sheetnames
+    assert "Someone Personal Name" not in workbook.sheetnames
+
+
+def test_period_report_agency_with_a_name_uses_it_as_the_sheet_title(tmp_path):
+    db_path = _db_path(tmp_path)
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60032, "Customer ID": "CUST232", "Customer Name": "Customer 232",
+        "PO Date": datetime.date(2026, 8, 5),
+        "Niche/Tablet Price (RM)": 10000,
+        "Agency Code": "AC501", "FCC/Agent": "Staff Y",
+    }])
+    process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 8, 17))
+
+    conn = get_connection(db_path)
+    conn.execute("UPDATE agencies SET name = 'Lachesis Marketing' WHERE agency_code = 'AC501'")
+    conn.commit()
+    conn.close()
+
+    report_path = tmp_path / "report.xlsx"
+    generate_period_report_file(db_path, "2026-08-01", "2026-08-31", str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    assert "Lachesis Marketing" in workbook.sheetnames
+    assert "AC501" not in workbook.sheetnames
+
+
 def test_splitting_agency_has_a_combined_sheet_and_separate_agent_sheets(tmp_path):
     """
     An agency with splits_by_agent on gets its own combined sheet with

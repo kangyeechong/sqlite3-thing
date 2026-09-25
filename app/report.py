@@ -262,7 +262,7 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
             c.full_commission_paid_date, c.installment_1_commission_paid_date,
             c.installment_6_commission_paid_date,
             cu.name AS customer_name,
-            a.splits_by_agent, a.agency_group, a.commission_split_type
+            a.name AS agency_name, a.splits_by_agent, a.agency_group, a.commission_split_type
         FROM contracts c
         LEFT JOIN customers cu ON cu.customer_id = c.customer_id
         LEFT JOIN agencies a ON a.agency_code = c.agency_code
@@ -320,6 +320,17 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
             # set, so every other agency still gets its own single
             # sheet exactly as before this existed.
             "agency_group": r["agency_group"] or r["agency_code"] or "(No Agency)",
+            # What to actually SHOW for this agency wherever its identity
+            # appears on a sheet (tab name, title line, the "Total for
+            # X"/split-column headers below) - never used for grouping or
+            # scoping a query, which always stays keyed by agency_group
+            # above (a human-entered Name can be blank, or shared by
+            # coincidence between two different agencies, neither of
+            # which is safe to group or filter data by). A multi-code
+            # group (agency_group set, e.g. "AW Consultancy") keeps
+            # showing its own group label rather than any one sub-code's
+            # individual Name - see app.agencies for where Name is set.
+            "agency_display_name": r["agency_group"] or r["agency_name"] or r["agency_code"] or "(No Agency)",
             "remarks": _clean_remarks(r["remarks"]),
             # No agency on file -> nothing to group by agent for
             # either; default to a flat listing rather than
@@ -1311,8 +1322,10 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
     # to its own agency_code as its "group", so it still gets exactly
     # one sheet, same as before this existed.
     groups = {}
+    group_display_names = {}
     for row in rows:
         groups.setdefault(row["agency_group"], []).append(row)
+        group_display_names.setdefault(row["agency_group"], row["agency_display_name"])
 
     # "(No Agency)" is a fallback bucket, not a real agency - moved to
     # the very end of the sheet order (regardless of where its POs
@@ -1325,7 +1338,14 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
 
     used_titles = {"All"}
     for group_name, group_rows in groups.items():
-        sheet_title = _unique_sheet_title(group_name, used_titles)
+        # group_name (agency_group, falling back to agency_code) is the
+        # real grouping/scoping key - it's what _load_summary_rows below
+        # is filtered by, so it must stay untouched. display_name is
+        # purely what a human sees (tab name, title line, split-column
+        # headers) - see agency_display_name above for why a Name can't
+        # safely be used as the key itself.
+        display_name = group_display_names[group_name]
+        sheet_title = _unique_sheet_title(display_name, used_titles)
         used_titles.add(sheet_title)
         sheet = workbook.create_sheet(sheet_title)
         # AW Consultancy (and any future agency seeded the same way -
@@ -1334,13 +1354,13 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
         # every other agency's sheet stays exactly as before.
         is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
         group_next_row = _write_table(
-            sheet, group_rows, start_row=1, title=_title_line(group_name, group_rows, run_date), run_date=run_date,
-            split_group_name=group_name if is_split_group else None,
+            sheet, group_rows, start_row=1, title=_title_line(display_name, group_rows, run_date), run_date=run_date,
+            split_group_name=display_name if is_split_group else None,
         )
         _write_summary_table(
             sheet, _load_summary_rows(conn, agency_group=group_name),
             start_row=group_next_row, current_run_id=commission_run_id,
-            split_group_name=group_name if is_split_group else None,
+            split_group_name=display_name if is_split_group else None,
         )
         _autosize_columns(sheet, split_column_count if is_split_group else column_count)
 
@@ -1511,8 +1531,10 @@ def generate_period_report(conn, period_start, period_end, output_path):
     _autosize_columns(all_sheet, column_count)
 
     groups = {}
+    group_display_names = {}
     for row in rows:
         groups.setdefault(row["agency_group"], []).append(row)
+        group_display_names.setdefault(row["agency_group"], row["agency_display_name"])
     if "(No Agency)" in groups:
         groups["(No Agency)"] = groups.pop("(No Agency)")
 
@@ -1520,14 +1542,19 @@ def generate_period_report(conn, period_start, period_end, output_path):
 
     used_titles = {"All"}
     for group_name, group_rows in groups.items():
-        sheet_title = _unique_sheet_title(group_name, used_titles)
+        # See the matching comment in generate_commission_run_report -
+        # group_name is the real grouping/scoping key (stays untouched,
+        # used below to filter _load_summary_rows), display_name is
+        # purely what a human sees.
+        display_name = group_display_names[group_name]
+        sheet_title = _unique_sheet_title(display_name, used_titles)
         used_titles.add(sheet_title)
         sheet = workbook.create_sheet(sheet_title)
         is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
-        group_title = _period_title(group_name, period_start, period_end, processed_date)
+        group_title = _period_title(display_name, period_start, period_end, processed_date)
         group_next_row = _write_table(
             sheet, group_rows, start_row=1, title=group_title, run_date=period_end,
-            split_group_name=group_name if is_split_group else None,
+            split_group_name=display_name if is_split_group else None,
         )
         group_summary_rows = _load_summary_rows(
             conn, agency_group=group_name, period_start=period_start, period_end=period_end,
@@ -1535,7 +1562,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
         _write_summary_table(
             sheet, group_summary_rows, start_row=group_next_row,
             current_run_id=latest_run_id,
-            split_group_name=group_name if is_split_group else None,
+            split_group_name=display_name if is_split_group else None,
         )
         _autosize_columns(sheet, split_column_count if is_split_group else column_count)
 
