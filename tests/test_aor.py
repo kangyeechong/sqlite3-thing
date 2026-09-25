@@ -14,9 +14,9 @@ import pytest
 
 import openpyxl
 
-from app.aor import _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file
+from app.aor import _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file, void_aor_trigger
 from app.db.connection import get_connection
-from app.pipeline import process_aor_upload, process_upload
+from app.pipeline import confirm_events, load_review, process_aor_upload, process_upload
 from tests.helpers import AOR_HEADERS, build_aor_report, build_master_report, confirm_all_pending
 
 
@@ -587,6 +587,229 @@ def test_full_pipeline_aor_paid_date_flows_through_to_confirmed_report(tmp_path)
     values = [c.value for row in sheet.iter_rows() for c in row]
     assert 700.0 in values
     assert 800.0 in values
+
+
+# --- void_aor_trigger: correcting a bad AOR receipt -----------------------
+
+def test_voiding_a_trigger_clears_the_paid_date_and_the_receipt(tmp_path):
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80100, "Customer ID": "CUSTV1", "Customer Name": "Customer V1",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-VOID-0001",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 80100, "Customer ID": "CUSTV1", "Customer Name": "Customer V1",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+    assert result["import_result"].paid_dates_written == 1
+
+    conn = get_connection(db_path)
+    voided = void_aor_trigger(conn, 80100, "installment_1", "tester", "wrong PO matched")
+    conn.commit()
+    assert voided is True
+
+    receipt = conn.execute(
+        "SELECT voided_at, voided_by_user, void_reason FROM aor_receipts "
+        "WHERE acknowledgment_receipt_no = 'RC-VOID-0001'"
+    ).fetchone()
+    assert receipt["voided_at"] is not None
+    assert receipt["voided_by_user"] == "tester"
+    assert receipt["void_reason"] == "wrong PO matched"
+
+    contract = conn.execute(
+        "SELECT first_installment_paid_date FROM contracts WHERE po_no = 80100"
+    ).fetchone()
+    assert contract["first_installment_paid_date"] is None
+    conn.close()
+
+
+def test_voiding_lets_a_reuploaded_receipt_with_the_same_ack_no_reapply(tmp_path):
+    """The whole point: once voided, the SAME Acknowledgment Receipt No
+    (Kenjin re-exporting the same real-world receipt, now correct)
+    must be picked up on a later upload instead of being silently
+    skipped as already-seen."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80101, "Customer ID": "CUSTV2", "Customer Name": "Customer V2",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-VOID-0002",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 80101, "Customer ID": "CUSTV2", "Customer Name": "Customer V2",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+
+    conn = get_connection(db_path)
+    void_aor_trigger(conn, 80101, "installment_1", "tester", "misread reference text")
+    conn.commit()
+    conn.close()
+
+    # Same ack_no, now with a later (corrected) date - re-uploading the
+    # exact same file must apply it, not skip it as already-seen.
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 20))
+    assert result["import_result"].receipts_imported == 1
+    assert result["import_result"].paid_dates_written == 1
+    assert len(result["raised_events"]) == 1
+    assert result["raised_events"][0]["po_no"] == 80101
+
+    conn = get_connection(db_path)
+    receipt = conn.execute(
+        "SELECT voided_at FROM aor_receipts WHERE acknowledgment_receipt_no = 'RC-VOID-0002'"
+    ).fetchone()
+    assert receipt["voided_at"] is None  # reused row, void marker cleared
+    conn.close()
+
+
+def test_voiding_a_confirmed_event_reuses_void_commission_event(tmp_path):
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80102, "Customer ID": "CUSTV3", "Customer Name": "Customer V3",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-VOID-0003",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 80102, "Customer ID": "CUSTV3", "Customer Name": "Customer V3",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+    run_id = result["commission_run_id"]
+    confirm_events(db_path, run_id, {e["id"] for e in result["raised_events"]}, "tester")
+
+    conn = get_connection(db_path)
+    event_before = conn.execute(
+        "SELECT id, status FROM commission_events WHERE po_no = 80102"
+    ).fetchone()
+    assert event_before["status"] == "confirmed"
+
+    void_aor_trigger(conn, 80102, "installment_1", "tester", "wrong PO matched")
+    conn.commit()
+
+    # Kept, not deleted - same "voided" audit trail as a human voiding
+    # it directly from the Review page.
+    event_after = conn.execute(
+        "SELECT status, voided_by_user, void_reason FROM commission_events WHERE id = ?",
+        (event_before["id"],),
+    ).fetchone()
+    assert event_after["status"] == "voided"
+    assert event_after["voided_by_user"] == "tester"
+    assert event_after["void_reason"] == "wrong PO matched"
+
+    flagged = conn.execute(
+        "SELECT installment_1_commission_flagged FROM contracts WHERE po_no = 80102"
+    ).fetchone()
+    assert flagged["installment_1_commission_flagged"] == 0
+    conn.close()
+
+
+def test_voiding_a_pending_event_deletes_it_rather_than_keeping_it_voided(tmp_path):
+    """A still-pending event was never confirmed/sent to Accounts, so
+    there's nothing worth a permanent 'voided' record for - it's just
+    removed, unlike a confirmed one."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80103, "Customer ID": "CUSTV4", "Customer Name": "Customer V4",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-VOID-0004",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 80103, "Customer ID": "CUSTV4", "Customer Name": "Customer V4",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+    # Deliberately never confirmed.
+
+    conn = get_connection(db_path)
+    event_before = conn.execute(
+        "SELECT id, status FROM commission_events WHERE po_no = 80103"
+    ).fetchone()
+    assert event_before["status"] == "pending"
+
+    void_aor_trigger(conn, 80103, "installment_1", "tester", "wrong PO matched")
+    conn.commit()
+
+    gone = conn.execute(
+        "SELECT id FROM commission_events WHERE id = ?", (event_before["id"],)
+    ).fetchone()
+    assert gone is None
+
+    flagged = conn.execute(
+        "SELECT installment_1_commission_flagged FROM contracts WHERE po_no = 80103"
+    ).fetchone()
+    assert flagged["installment_1_commission_flagged"] == 0
+    conn.close()
+
+
+def test_voiding_a_trigger_voids_every_receipt_that_fed_it_not_just_one(tmp_path):
+    """The split-payment pattern - ADVANCE PARTIAL + ADVANCE BALANCE,
+    both tagged the same installment - votes as a pair: voiding the
+    trigger voids BOTH receipts, since there's no reliable way to tell
+    which one of a pair was actually the mistake."""
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80104, "Customer ID": "CUSTV5", "Customer Name": "Customer V5",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-VOID-0005A",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 13),
+            "PO No": 80104, "Customer ID": "CUSTV5", "Customer Name": "Customer V5",
+            "Reference No": "C V5956 ADVANCE PARTIAL PAYMENT (INST 01/24)",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-VOID-0005B",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 15),
+            "PO No": 80104, "Customer ID": "CUSTV5", "Customer Name": "Customer V5",
+            "Reference No": "TRF 15/08/2026 ADVANCE BALANCE PAYMENT (INST 01/24)",
+        },
+    ])
+    process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+
+    conn = get_connection(db_path)
+    void_aor_trigger(conn, 80104, "installment_1", "tester", "both receipts on the wrong PO")
+    conn.commit()
+
+    voided_count = conn.execute(
+        "SELECT COUNT(*) AS n FROM aor_receipts WHERE po_no = 80104 AND voided_at IS NOT NULL"
+    ).fetchone()["n"]
+    assert voided_count == 2
+    conn.close()
+
+
+def test_voiding_a_trigger_with_nothing_to_void_returns_false(tmp_path):
+    db_path = _db_path(tmp_path)
+    conn = get_connection(db_path)
+    voided = void_aor_trigger(conn, 99999999, "installment_1", "tester", "nothing here")
+    conn.commit()
+    conn.close()
+    assert voided is False
 
 
 # --- annotate_aor_file: the downloadable annotated copy -----------------

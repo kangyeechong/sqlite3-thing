@@ -43,6 +43,7 @@ from dataclasses import dataclass, field
 import openpyxl
 from openpyxl.styles import PatternFill
 
+from . import commission
 from .importer import _is_positive_whole_number, _to_iso_date, _to_number
 
 # Matches the same green already used elsewhere in this app for "fully
@@ -258,9 +259,14 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
         )
 
     result = AorImportResult()
+    # Excludes voided rows (see void_aor_trigger) - a receipt staff
+    # voided because it turned out wrong is no longer "already
+    # applied," so a future upload carrying the same acknowledgment
+    # receipt no (Kenjin re-exporting the same real-world receipt,
+    # corrected) can be reprocessed instead of being silently skipped.
     already_imported = {
         row["acknowledgment_receipt_no"]
-        for row in conn.execute("SELECT acknowledgment_receipt_no FROM aor_receipts")
+        for row in conn.execute("SELECT acknowledgment_receipt_no FROM aor_receipts WHERE voided_at IS NULL")
     }
     # Whether a receipt's own classification counts as a "valid
     # payment" depends on its PO actually existing - snapshotted once
@@ -375,13 +381,28 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
     # (including "skip" and "unrecognized") - once a human has had the
     # chance to see an unrecognized one flagged, re-flagging the exact
     # same receipt on every future overlapping upload adds nothing.
+    #
+    # ON CONFLICT rather than a plain INSERT: acknowledgment_receipt_no
+    # is only ever excluded from already_imported (above) when its
+    # existing row was voided, so the only way this INSERT can collide
+    # with an existing row is a previously-voided one getting
+    # reapplied with fresh data - reuse and overwrite that exact row,
+    # resetting voided_at/voided_by_user/void_reason back to NULL,
+    # rather than fail on the UNIQUE constraint.
     for ack_no in seen_this_upload:
         details = receipt_details[ack_no]
         conn.execute(
             "INSERT INTO aor_receipts "
             "(acknowledgment_receipt_no, po_no, imported_at, imported_by_user, source_filename, "
             "aor_upload_id, receipt_date, reference_text, payment_received, trigger_type) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) "
+            "ON CONFLICT(acknowledgment_receipt_no) DO UPDATE SET "
+            "po_no = excluded.po_no, imported_at = excluded.imported_at, "
+            "imported_by_user = excluded.imported_by_user, source_filename = excluded.source_filename, "
+            "aor_upload_id = excluded.aor_upload_id, receipt_date = excluded.receipt_date, "
+            "reference_text = excluded.reference_text, payment_received = excluded.payment_received, "
+            "trigger_type = excluded.trigger_type, "
+            "voided_at = NULL, voided_by_user = NULL, void_reason = NULL",
             (
                 ack_no, details["po_no"], now_iso, imported_by_user, source_filename,
                 aor_upload_id, details["receipt_date"], details["reference_text"],
@@ -413,6 +434,91 @@ def import_aor_report(conn, file_path, imported_by_user=None, aor_upload_id=None
         result.paid_dates_written += 1
 
     return result
+
+
+def void_aor_trigger(conn, po_no, trigger_type, voided_by_user, reason):
+    """
+    Voids one PO's whole trigger (installment_1, installment_6, or
+    full_payment) - every AOR receipt that contributed to it, not just
+    one - because the underlying data turned out wrong (a typo'd PO
+    No, a misread Reference No, a receipt that should never have
+    matched this PO at all).
+
+    Deliberately voids the WHOLE trigger rather than a single receipt:
+    a real receipt (the "split payment" pattern - ADVANCE PARTIAL +
+    ADVANCE BALANCE, both tagged the same installment) is sometimes
+    two receipts working together, and there's no reliable way to tell
+    which one of a pair is the bad one without a human reading both.
+    Voiding both and letting the correct data reapply naturally on the
+    next AOR upload (the real Kenjin export is cumulative - it keeps
+    re-listing old receipts, not just new ones, so nothing needs a
+    special "corrected" file just for this) is simpler and safer than
+    guessing which single receipt to blame.
+
+    What voiding actually does:
+      - Every un-voided aor_receipts row for this po_no whose own
+        trigger_type includes this trigger gets marked voided (see the
+        voided_at/voided_by_user/void_reason columns in schema.sql) -
+        never deleted, and no longer counted as "already applied," so
+        a future AOR upload carrying the same Acknowledgment Receipt
+        No can reapply it once the data's actually right.
+      - The contract's own paid-date column for this trigger is reset
+        to NULL, so there's nothing left over to block the correct
+        date from being written once the receipt reapplies.
+      - Any commission_event already raised from this trigger is
+        cleared too: a confirmed one goes through the normal
+        commission.void_commission_event (kept forever, with its own
+        reason, same as a human voiding one from the Review page); a
+        still-pending one is simply deleted (it was never sent to
+        Accounts, so there's nothing there worth keeping a permanent
+        record of) - either way, contracts.*_commission_flagged gets
+        cleared so the trigger is ready to be detected fresh.
+
+    A receipt whose own trigger_type happens to cover MORE than one
+    trigger (e.g. a single Reference No somehow tagged with both INST
+    01 and INST 06 - rare, but the classification rules allow it) gets
+    voided in full even if only one of its triggers was asked for -
+    same reasoning as the split-payment case: the other trigger it
+    touched will simply reapply on the next AOR upload too.
+
+    Returns True if anything was actually voided, False if no
+    un-voided receipt for this po_no/trigger_type exists (a stale
+    page, a typo'd PO No, or a double-submitted form).
+    """
+    now_iso = datetime.datetime.now().isoformat()
+    candidate_rows = conn.execute(
+        "SELECT id, trigger_type FROM aor_receipts WHERE po_no = ? AND voided_at IS NULL",
+        (po_no,),
+    ).fetchall()
+    matching_ids = [
+        row["id"] for row in candidate_rows
+        if row["trigger_type"] and trigger_type in row["trigger_type"].split(",")
+    ]
+    if not matching_ids:
+        return False
+
+    for receipt_id in matching_ids:
+        conn.execute(
+            "UPDATE aor_receipts SET voided_at = ?, voided_by_user = ?, void_reason = ? WHERE id = ?",
+            (now_iso, voided_by_user, reason, receipt_id),
+        )
+
+    date_column = _TRIGGER_TO_DATE_COLUMN[trigger_type]
+    conn.execute(f"UPDATE contracts SET {date_column} = NULL WHERE po_no = ?", (po_no,))
+
+    event = conn.execute(
+        "SELECT id, status FROM commission_events WHERE po_no = ? AND trigger_type = ? "
+        "AND status IN ('pending', 'confirmed')",
+        (po_no, trigger_type),
+    ).fetchone()
+    if event is not None and event["status"] == "confirmed":
+        commission.void_commission_event(conn, event["id"], voided_by_user, reason)
+    else:
+        if event is not None:
+            conn.execute("DELETE FROM commission_events WHERE id = ?", (event["id"],))
+        commission.clear_commission_flag(conn, po_no, trigger_type)
+
+    return True
 
 
 def annotate_aor_file(file_path, output, po_period_start, po_period_end):

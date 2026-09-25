@@ -650,3 +650,122 @@ def test_download_aor_annotated_404s_for_an_unknown_run(client):
     assert response.status_code == 404
 
 
+def _void_aor_trigger(client, po_no, trigger_type="installment_1", reason="wrong PO matched"):
+    token = _csrf_token(client, "/reports")
+    return client.post(
+        "/void-aor-trigger",
+        data={"csrf_token": token, "po_no": str(po_no), "trigger_type": trigger_type, "reason": reason},
+        follow_redirects=True,
+    )
+
+
+def test_void_aor_trigger_route_requires_login(client):
+    response = client.post("/void-aor-trigger", data={"po_no": "1", "trigger_type": "installment_1"})
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_void_aor_trigger_without_a_valid_csrf_token_is_rejected(client):
+    _login(client)
+    response = client.post(
+        "/void-aor-trigger",
+        data={
+            "csrf_token": "made-up-token", "po_no": "1", "trigger_type": "installment_1",
+            "reason": "wrong PO matched",
+        },
+    )
+    assert response.status_code == 400
+
+
+def test_void_aor_trigger_with_a_non_numeric_po_no_is_rejected(client):
+    _login(client)
+    response = _void_aor_trigger(client, "not-a-number")
+    assert response.status_code == 200
+    assert b"PO No must be a number" in response.data
+
+
+def test_void_aor_trigger_with_an_invalid_trigger_type_is_rejected(client):
+    _login(client)
+    token = _csrf_token(client, "/reports")
+    response = client.post(
+        "/void-aor-trigger",
+        data={
+            "csrf_token": token, "po_no": "80100", "trigger_type": "not_a_real_trigger",
+            "reason": "wrong PO matched",
+        },
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"invalid trigger" in response.data
+
+
+def test_void_aor_trigger_without_a_reason_is_rejected(client, tmp_path):
+    _login(client)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 70010, "Customer ID": "CUSTWEBVOID1", "Customer Name": "Web Void Customer 1",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    _upload(client, xlsx_master)
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-WEBVOID-0001",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 70010, "Customer ID": "CUSTWEBVOID1", "Customer Name": "Web Void Customer 1",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    _upload_aor(client, xlsx_aor)
+
+    response = _void_aor_trigger(client, 70010, reason="")
+    assert response.status_code == 200
+    assert b"reason is required" in response.data.lower()
+
+
+def test_void_aor_trigger_with_nothing_to_void_shows_a_clear_message(client):
+    _login(client)
+    response = _void_aor_trigger(client, 999999999)
+    assert response.status_code == 200
+    assert b"no AOR receipt found" in response.data
+
+
+def test_void_aor_trigger_success_lets_a_corrected_reupload_reapply(client, tmp_path):
+    """
+    Full round trip through the actual HTTP layer, matching the design
+    the feature exists for: a receipt landed on the wrong PO, staff
+    void its trigger from Past Reports, then re-upload the (corrected)
+    AOR export - the same Acknowledgment Receipt No must be picked up
+    again instead of being skipped as already-seen.
+    """
+    _login(client)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 70011, "Customer ID": "CUSTWEBVOID2", "Customer Name": "Web Void Customer 2",
+        "Niche/Tablet Price (RM)": 10000,  # 7.5% = 750.00
+        "Agency Code": "AC001",
+    }])
+    _upload(client, xlsx_master)
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-WEBVOID-0002",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 70011, "Customer ID": "CUSTWEBVOID2", "Customer Name": "Web Void Customer 2",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    upload_response = _upload_aor(client, xlsx_aor)
+    assert b"1 paid-date" in upload_response.data
+
+    void_response = _void_aor_trigger(client, 70011, reason="wrong PO matched")
+    assert void_response.status_code == 200
+    assert b"voided" in void_response.data.lower()
+    assert b"re-upload a corrected AOR file" in void_response.data
+
+    # Re-uploading the same file (as if corrected in Kenjin and
+    # re-exported with the same Acknowledgment Receipt No) must apply
+    # it again, not silently skip it as already-seen.
+    reupload_response = _upload_aor(client, xlsx_aor)
+    assert b"1 paid-date" in reupload_response.data
+    assert b"750.00" in reupload_response.data
+    assert b"Review &amp; confirm" in reupload_response.data
+
+

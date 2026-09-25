@@ -251,7 +251,21 @@ CREATE TABLE IF NOT EXISTS aor_receipts (
     receipt_date               TEXT,
     reference_text             TEXT,
     payment_received           NUMERIC,
-    trigger_type               TEXT
+    trigger_type               TEXT,
+    -- Set together by app.aor.void_aor_trigger when staff void a PO's
+    -- whole trigger (every receipt that contributed to it, not just
+    -- one) because it turned out wrong - never deleted, so the
+    -- mistake and who corrected it stay visible, same "nothing
+    -- hidden" philosophy as commission_events' own voided_* columns.
+    -- A voided row is excluded from import_aor_report's
+    -- already_imported check, so a future upload carrying the same
+    -- acknowledgment_receipt_no (Kenjin re-exporting the same
+    -- real-world receipt, corrected) reuses and overwrites this exact
+    -- row via ON CONFLICT, resetting these three columns back to NULL
+    -- - the UNIQUE constraint above never needed to change.
+    voided_at                  TEXT,
+    voided_by_user             TEXT,
+    void_reason                TEXT
 );
 
 -- The raw bytes of an uploaded AOR export, kept only so its

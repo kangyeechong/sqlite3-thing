@@ -100,6 +100,12 @@ _MIGRATIONS = [
      "ALTER TABLE aor_uploads ADD COLUMN period_start TEXT", None),
     ("aor_uploads", "period_end",
      "ALTER TABLE aor_uploads ADD COLUMN period_end TEXT", None),
+    ("aor_receipts", "voided_at",
+     "ALTER TABLE aor_receipts ADD COLUMN voided_at TEXT", None),
+    ("aor_receipts", "voided_by_user",
+     "ALTER TABLE aor_receipts ADD COLUMN voided_by_user TEXT", None),
+    ("aor_receipts", "void_reason",
+     "ALTER TABLE aor_receipts ADD COLUMN void_reason TEXT", None),
 ]
 
 # For a brand-new table (not a new column on an existing one) - same

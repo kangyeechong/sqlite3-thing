@@ -23,7 +23,7 @@ from ..aor import annotate_aor_file
 from ..db.connection import get_connection
 from ..pipeline import (
     confirm_events, list_aor_uploads, list_confirmed_runs, list_runs_with_pending_events,
-    load_review, process_aor_upload, process_upload, void_event,
+    load_review, process_aor_upload, process_upload, void_aor_trigger, void_event,
 )
 from ..report import TRIGGER_LABELS, generate_commission_run_report, generate_period_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
@@ -278,7 +278,10 @@ def reports():
     runs = list_confirmed_runs(current_app.config["DB_PATH"])
     pending_runs = list_runs_with_pending_events(current_app.config["DB_PATH"])
     aor_uploads = list_aor_uploads(current_app.config["DB_PATH"])
-    return render_template("reports.html", runs=runs, pending_runs=pending_runs, aor_uploads=aor_uploads)
+    return render_template(
+        "reports.html", runs=runs, pending_runs=pending_runs, aor_uploads=aor_uploads,
+        trigger_labels=TRIGGER_LABELS,
+    )
 
 
 @bp.route("/review/<int:run_id>")
@@ -360,6 +363,51 @@ def void_review_event(run_id):
         flash("Couldn't void that - it may already be voided, or doesn't belong to this run.")
 
     return redirect(url_for("web.review", run_id=run_id))
+
+
+@bp.route("/void-aor-trigger", methods=["POST"])
+@login_required
+def void_aor_trigger_route():
+    """
+    Voids one PO's whole trigger - every AOR receipt that fed it, the
+    paid-date it set, and any commission event raised from it - see
+    app.aor.void_aor_trigger for the full reasoning. Unlike voiding a
+    confirmed commission event (which assumes the paid-date was always
+    correct and only the math was wrong), this is for when the AOR
+    data itself was wrong - a receipt matched to the wrong PO, a
+    misread Reference No - and needs to be un-stuck so a corrected
+    re-upload can actually apply.
+    """
+    validate_csrf_token(request.form.get("csrf_token"))
+
+    try:
+        po_no = int(request.form.get("po_no", ""))
+    except ValueError:
+        flash("Couldn't void that - PO No must be a number.")
+        return redirect(url_for("web.reports"))
+
+    trigger_type = request.form.get("trigger_type", "")
+    if trigger_type not in TRIGGER_LABELS:
+        flash("Couldn't void that - invalid trigger.")
+        return redirect(url_for("web.reports"))
+
+    reason = (request.form.get("reason") or "").strip()
+    if not reason:
+        flash("A reason is required to void an AOR trigger.")
+        return redirect(url_for("web.reports"))
+
+    voided = void_aor_trigger(
+        current_app.config["DB_PATH"], po_no, trigger_type, session["user_email"], reason,
+    )
+    if voided:
+        flash(
+            f"PO {po_no}'s {TRIGGER_LABELS[trigger_type]} voided - re-upload a corrected AOR file "
+            f"to reapply it once the data's actually right."
+        )
+    else:
+        flash(f"Couldn't void that - no AOR receipt found for PO {po_no}'s {TRIGGER_LABELS[trigger_type]}.")
+
+    return redirect(url_for("web.reports"))
 
 
 @bp.route("/download/<int:run_id>")

@@ -339,6 +339,17 @@ def confirm_commission_events(conn, event_ids, confirmed_by_user):
     return confirmed_count
 
 
+def clear_commission_flag(conn, po_no, trigger_type):
+    """
+    Clears the contracts.*_commission_flagged column for one PO's
+    trigger, so the next commission run can detect it fresh. Shared by
+    void_commission_event below (a confirmed event turned out wrong)
+    and app.aor.void_aor_trigger (the underlying AOR receipt turned
+    out wrong, possibly with no confirmed event yet to void).
+    """
+    conn.execute(_FLAG_COLUMN_CLEAR_SQL[trigger_type], (po_no,))
+
+
 def void_commission_event(conn, event_id, voided_by_user, reason):
     """
     Reverses a confirmed commission event that turned out to be wrong
@@ -349,19 +360,23 @@ def void_commission_event(conn, event_id, voided_by_user, reason):
     comment in schema.sql), just excludes it from every report the same
     way a still-pending event already is.
 
-    Clears the matching contracts.*_commission_flagged column so the
-    next commission run can detect this PO's trigger fresh, once
-    whatever was actually wrong has been corrected at the source (a
-    re-uploaded Master report, typically). Voiding by itself never
-    creates a new figure - it only un-sticks the PO so the ordinary
-    detect -> review -> confirm pipeline can redo it correctly, the
-    exact same human check a first-time detection gets.
+    Clears the matching contracts.*_commission_flagged column (see
+    clear_commission_flag) so the next commission run can detect this
+    PO's trigger fresh, once whatever was actually wrong has been
+    corrected at the source (a re-uploaded Master report, typically).
+    Voiding by itself never creates a new figure - it only un-sticks
+    the PO so the ordinary detect -> review -> confirm pipeline can
+    redo it correctly, the exact same human check a first-time
+    detection gets.
 
     Only a 'confirmed' event can be voided - a still-pending one just
-    shouldn't be confirmed in the first place, and an already-voided
-    one can't be voided twice. Returns True if it actually voided
-    something, False if event_id doesn't exist or isn't confirmed (a
-    stale page, or a double-submitted form).
+    shouldn't be confirmed in the first place (see app.aor.
+    void_aor_trigger for how a still-pending event gets cleared
+    instead, when it's the underlying AOR receipt being voided rather
+    than a human voiding a confirmed event from the Review page), and
+    an already-voided one can't be voided twice. Returns True if it
+    actually voided something, False if event_id doesn't exist or
+    isn't confirmed (a stale page, or a double-submitted form).
     """
     event = conn.execute(
         "SELECT po_no, trigger_type FROM commission_events WHERE id = ? AND status = 'confirmed'",
@@ -376,5 +391,5 @@ def void_commission_event(conn, event_id, voided_by_user, reason):
         "voided_by_user = ?, void_reason = ? WHERE id = ?",
         (now_iso, voided_by_user, reason, event_id),
     )
-    conn.execute(_FLAG_COLUMN_CLEAR_SQL[event["trigger_type"]], (event["po_no"],))
+    clear_commission_flag(conn, event["po_no"], event["trigger_type"])
     return True

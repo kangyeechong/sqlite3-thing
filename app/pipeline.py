@@ -8,7 +8,7 @@ import contextlib
 import datetime
 import os
 
-from .aor import import_aor_report
+from .aor import import_aor_report, void_aor_trigger as _void_aor_trigger
 from .db.connection import get_connection, init_db
 from .importer import import_master_report
 from .commission import (
@@ -283,5 +283,20 @@ def void_event(db_path, commission_run_id, event_id, voided_by_user, reason):
         if not belongs_to_run:
             return False
         voided = void_commission_event(conn, event_id, voided_by_user, reason)
+        conn.commit()
+        return voided
+
+
+def void_aor_trigger(db_path, po_no, trigger_type, voided_by_user, reason):
+    """
+    Voids one PO's whole trigger - see app.aor.void_aor_trigger for
+    what this actually does. Used when the AOR data itself was wrong
+    (wrong PO, misread reference text), not just the commission math -
+    see void_event above for voiding a confirmed event whose
+    underlying paid-date was always correct. Returns True if anything
+    was actually voided.
+    """
+    with _connect(db_path) as conn:
+        voided = _void_aor_trigger(conn, po_no, trigger_type, voided_by_user, reason)
         conn.commit()
         return voided

@@ -87,5 +87,25 @@
     <p class="muted">No AOR files uploaded yet.</p>
   {% endif %}
 
+  <h2>Void an AOR trigger</h2>
+  <p class="muted">Made a mistake in an AOR upload itself - a receipt matched to the wrong PO, a misread Reference No, or anything else where the underlying data (not just the commission math) was wrong? Voiding a PO's trigger here clears every AOR receipt that fed it, resets its paid-date to blank, and voids any commission event already raised from it - then re-upload a corrected AOR file to reapply it once the data's right. If a wrongly-<em>confirmed</em> commission just needs redoing with the same, correct paid-date, use "Review" on the confirmed run instead - this is only for when the AOR data itself was wrong.</p>
+  <form method="post" action="{{ url_for('web.void_aor_trigger_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>PO No
+      <input type="number" name="po_no" required>
+    </label>
+    <label>Trigger
+      <select name="trigger_type" required>
+        {% for value, label in trigger_labels.items() %}
+          <option value="{{ value }}">{{ label }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Reason
+      <input type="text" name="reason" required>
+    </label>
+    <button class="button" type="submit">Void</button>
+  </form>
+
   <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>
 {% endblock %}
