@@ -247,10 +247,27 @@ def list_aor_uploads(db_path):
     detected that run (unlike list_confirmed_runs above) - an AOR
     upload's file is always worth being able to get back to, whether
     or not it happened to raise anything new that time.
+
+    voided_receipt_count: how many of THIS upload's own receipts are
+    currently sitting voided (see app.aor.void_aor_trigger) - flagging
+    an upload that still has something broken, waiting to be corrected
+    and reapplied. Scoped to aor_receipts.aor_upload_id, which always
+    reflects whichever upload MOST RECENTLY wrote that receipt row
+    (see import_aor_report's UPSERT) - so once a corrected reupload
+    reapplies it (clearing voided_at and re-stamping aor_upload_id to
+    the new upload), the count naturally drops back to 0 on the
+    original upload and never appears on the new one either, with
+    nothing here needing to track that handoff explicitly.
     """
     with _connect(db_path) as conn:
         return conn.execute(
-            "SELECT id, filename, uploaded_at, po_months FROM aor_uploads ORDER BY uploaded_at DESC, id DESC"
+            """
+            SELECT u.id, u.filename, u.uploaded_at, u.po_months,
+                   (SELECT COUNT(*) FROM aor_receipts r
+                    WHERE r.aor_upload_id = u.id AND r.voided_at IS NOT NULL) AS voided_receipt_count
+            FROM aor_uploads u
+            ORDER BY u.uploaded_at DESC, u.id DESC
+            """
         ).fetchall()
 
 

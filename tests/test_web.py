@@ -799,6 +799,44 @@ def test_void_aor_trigger_success_lets_a_corrected_reupload_reapply(client, tmp_
     assert b"Review &amp; confirm" in reupload_response.data
 
 
+def test_past_aor_uploads_flags_a_still_voided_receipt(client, tmp_path):
+    """
+    Past Reports must make a still-broken upload visible, not leave it
+    looking identical to a perfectly fine one - see
+    app.pipeline.list_aor_uploads' voided_receipt_count.
+    """
+    _login(client)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 70012, "Customer ID": "CUSTWEBVOID3", "Customer Name": "Web Void Customer 3",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    _upload(client, xlsx_master)
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-WEBVOID-0003",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 70012, "Customer ID": "CUSTWEBVOID3", "Customer Name": "Web Void Customer 3",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    _upload_aor(client, xlsx_aor, filename="voided_status_test.xlsx")
+
+    page_before = client.get("/reports")
+    assert b"voided_status_test.xlsx" in page_before.data
+    assert b"needs reapplying" not in page_before.data
+
+    _void_aor_trigger(client, 70012, reason="wrong PO matched")
+
+    page_after = client.get("/reports")
+    assert b"1 voided - needs reapplying" in page_after.data
+
+    # Reapplying the same file clears the flag again.
+    _upload_aor(client, xlsx_aor, filename="voided_status_test.xlsx")
+    page_reapplied = client.get("/reports")
+    assert b"needs reapplying" not in page_reapplied.data
+
+
 def _create_agency(client, agency_code, name="Test Agency", format_key="xemp"):
     token = _csrf_token(client, "/agencies")
     return client.post(

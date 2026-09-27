@@ -18,7 +18,7 @@ from app.aor import (
     _GREEN_FILL, _YELLOW_FILL, _classify_reference, annotate_aor_file, po_months_summary, void_aor_trigger,
 )
 from app.db.connection import get_connection
-from app.pipeline import confirm_events, load_review, process_aor_upload, process_upload
+from app.pipeline import confirm_events, list_aor_uploads, load_review, process_aor_upload, process_upload
 from tests.helpers import AOR_HEADERS, build_aor_report, build_master_report, confirm_all_pending
 
 
@@ -863,6 +863,55 @@ def test_voiding_lets_a_reuploaded_receipt_with_the_same_ack_no_reapply(tmp_path
     ).fetchone()
     assert receipt["voided_at"] is None  # reused row, void marker cleared
     conn.close()
+
+
+def test_voided_receipt_count_flags_the_upload_then_clears_on_reapply(tmp_path):
+    """
+    "Past AOR uploads" surfaces whether an upload's own receipt is
+    currently sitting voided (still broken, waiting on a corrected
+    reupload) - 0 before voiding, >0 right after, and back to 0 once a
+    later upload reapplies the same acknowledgment receipt no (which
+    re-stamps aor_upload_id onto that NEW upload and clears voided_at -
+    see import_aor_report's UPSERT).
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80110, "Customer ID": "CUSTV10", "Customer Name": "Customer V10",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date.today())
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-VOID-0010",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "PO No": 80110, "Customer ID": "CUSTV10", "Customer Name": "Customer V10",
+        "Reference No": "TRF 10/08/2026 (INST 01/24)",
+    }])
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+    upload_id = result["aor_upload_id"]
+
+    def _voided_count():
+        upload = next(u for u in list_aor_uploads(db_path) if u["id"] == upload_id)
+        return upload["voided_receipt_count"]
+
+    assert _voided_count() == 0
+
+    conn = get_connection(db_path)
+    void_aor_trigger(conn, 80110, "installment_1", "tester", "wrong PO matched")
+    conn.commit()
+    conn.close()
+
+    assert _voided_count() == 1
+
+    # A later upload reapplies the same ack_no - the original upload's
+    # count drops back to 0 (the receipt row has moved on), and the new
+    # upload itself isn't flagged either, since it's no longer voided.
+    result2 = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 20))
+    assert _voided_count() == 0
+    new_upload = next(u for u in list_aor_uploads(db_path) if u["id"] == result2["aor_upload_id"])
+    assert new_upload["voided_receipt_count"] == 0
 
 
 def test_voiding_a_confirmed_event_reuses_void_commission_event(tmp_path):
