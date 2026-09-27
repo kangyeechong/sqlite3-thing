@@ -1,0 +1,342 @@
+<title>Commission Tool Guide</title>
+<style>
+  :root {
+    --ink: #22282a;
+    --ink-soft: #4b4540;
+    --paper: #fbf9f4;
+    --panel: #ffffff;
+    --line: #ddd3bf;
+    --accent: #8b6b3d;
+    --accent-deep: #5f4522;
+    --muted: #6b6459;
+    --warn-bg: #fdf1de;
+    --warn-line: #c98a2e;
+    --warn-ink: #6b4715;
+    --tip-bg: #eef2ea;
+    --tip-line: #5f7a4a;
+    --tip-ink: #3c5230;
+    --code-bg: #f1ece0;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --ink: #ece7dd;
+      --ink-soft: #c9c2b4;
+      --paper: #1c1a16;
+      --panel: #242119;
+      --line: #423c30;
+      --accent: #d3a35e;
+      --accent-deep: #e6bd7c;
+      --muted: #a39a8a;
+      --warn-bg: #3a2c12;
+      --warn-line: #c98a2e;
+      --warn-ink: #f0c98a;
+      --tip-bg: #1f2a1a;
+      --tip-line: #6f9256;
+      --tip-ink: #bcd4a8;
+      --code-bg: #2a251c;
+      color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --ink: #ece7dd;
+    --ink-soft: #c9c2b4;
+    --paper: #1c1a16;
+    --panel: #242119;
+    --line: #423c30;
+    --accent: #d3a35e;
+    --accent-deep: #e6bd7c;
+    --muted: #a39a8a;
+    --warn-bg: #3a2c12;
+    --warn-line: #c98a2e;
+    --warn-ink: #f0c98a;
+    --tip-bg: #1f2a1a;
+    --tip-line: #6f9256;
+    --tip-ink: #bcd4a8;
+    --code-bg: #2a251c;
+    color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "Source Sans 3", "Segoe UI", Arial, sans-serif;
+    font-size: 16px;
+    line-height: 1.6;
+    margin: 0;
+    padding: 0 20px;
+  }
+  .page {
+    max-width: 760px;
+    margin: 0 auto;
+    padding: 48px 0 96px;
+  }
+  h1, h2, h3 {
+    font-family: "Libre Franklin", "Segoe UI", Arial, sans-serif;
+    color: var(--accent-deep);
+    text-wrap: balance;
+    line-height: 1.2;
+  }
+  h1 {
+    font-size: 34px;
+    font-weight: 800;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+  }
+  .subtitle {
+    font-size: 17px;
+    color: var(--muted);
+    margin: 0 0 40px;
+    max-width: 60ch;
+  }
+  h2 {
+    font-size: 22px;
+    font-weight: 700;
+    margin: 56px 0 4px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+  }
+  h2 .num {
+    color: var(--accent);
+    font-variant-numeric: tabular-nums;
+    margin-right: 10px;
+  }
+  h3 {
+    font-size: 17px;
+    font-weight: 700;
+    color: var(--ink);
+    margin: 28px 0 6px;
+  }
+  p { margin: 12px 0; max-width: 68ch; }
+  ul, ol { margin: 10px 0; padding-left: 24px; max-width: 66ch; }
+  li { margin: 6px 0; }
+  strong { color: var(--ink); }
+  a { color: var(--accent-deep); }
+  .muted { color: var(--muted); }
+
+  .lede {
+    font-size: 17px;
+    color: var(--ink-soft);
+    max-width: 66ch;
+  }
+
+  nav.toc {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 18px 22px;
+    margin: 28px 0 8px;
+  }
+  nav.toc .toc-title {
+    font-family: "Libre Franklin", sans-serif;
+    font-weight: 700;
+    font-size: 13px;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--muted);
+    margin-bottom: 10px;
+  }
+  nav.toc ol {
+    list-style: none;
+    padding-left: 0;
+    margin: 0;
+    columns: 2;
+    column-gap: 24px;
+  }
+  nav.toc li { margin: 4px 0; break-inside: avoid; }
+  nav.toc a { text-decoration: none; font-size: 15px; }
+  nav.toc a:hover { text-decoration: underline; }
+
+  .callout {
+    border-left: 4px solid var(--accent);
+    background: var(--panel);
+    border-radius: 0 8px 8px 0;
+    padding: 14px 18px;
+    margin: 16px 0;
+    max-width: 66ch;
+  }
+  .callout p:first-child { margin-top: 0; }
+  .callout p:last-child { margin-bottom: 0; }
+  .callout .label {
+    font-family: "Libre Franklin", sans-serif;
+    font-weight: 800;
+    font-size: 12px;
+    letter-spacing: 0.08em;
+    text-transform: uppercase;
+    display: block;
+    margin-bottom: 6px;
+  }
+  .callout.warn { border-color: var(--warn-line); background: var(--warn-bg); }
+  .callout.warn .label { color: var(--warn-ink); }
+  .callout.tip { border-color: var(--tip-line); background: var(--tip-bg); }
+  .callout.tip .label { color: var(--tip-ink); }
+
+  table {
+    border-collapse: collapse;
+    width: 100%;
+    max-width: 66ch;
+    margin: 14px 0 20px;
+    font-size: 14.5px;
+  }
+  th, td {
+    border: 1px solid var(--line);
+    padding: 9px 12px;
+    text-align: left;
+    vertical-align: top;
+  }
+  th {
+    background: var(--panel);
+    font-family: "Libre Franklin", sans-serif;
+    font-weight: 700;
+    color: var(--accent-deep);
+  }
+  code {
+    background: var(--code-bg);
+    border-radius: 4px;
+    padding: 1px 6px;
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    font-size: 0.92em;
+  }
+
+  .stepnum {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 22px;
+    height: 22px;
+    border-radius: 50%;
+    background: var(--accent);
+    color: #fff;
+    font-family: "Libre Franklin", sans-serif;
+    font-weight: 700;
+    font-size: 12px;
+    margin-right: 8px;
+    flex: none;
+  }
+  ol.steps { list-style: none; padding-left: 0; }
+  ol.steps li { display: flex; align-items: flex-start; margin: 10px 0; }
+  ol.steps li > span.body { flex: 1; }
+
+  footer {
+    margin-top: 64px;
+    padding-top: 20px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font-size: 14px;
+  }
+</style>
+
+<div class="page">
+
+  <h1>Commission Tool Guide</h1>
+  <p class="subtitle">How to use the Agent Commission Tool day to day — uploading reports, confirming commissions, fixing mistakes, and managing agencies.</p>
+
+  <p class="lede">This tool keeps a standing ledger of every purchase order (PO) XEKL has ever sold, tracks when each one's commission becomes due, and generates the Excel reports Accounts and agencies actually get paid from. Nothing about a PO ever gets hidden — a contract that hasn't paid yet, or was cancelled, still shows up every time. This guide walks through the screens you'll actually use.</p>
+
+  <nav class="toc">
+    <div class="toc-title">On this page</div>
+    <ol>
+      <li><a href="#master-report">1. Uploading a Master Report</a></li>
+      <li><a href="#aor-report">2. Uploading an AOR Report</a></li>
+      <li><a href="#review-confirm">3. Reviewing &amp; confirming</a></li>
+      <li><a href="#reports">4. Downloading reports</a></li>
+      <li><a href="#fixing-mistakes">5. Fixing a mistake</a></li>
+      <li><a href="#agencies">6. Managing agencies</a></li>
+      <li><a href="#good-to-know">7. Good to know</a></li>
+    </ol>
+  </nav>
+
+  <h2 id="master-report"><span class="num">1</span>Uploading a Master Report</h2>
+  <p>The Master Report (Kenjin's "Commission Base Report") is the source of truth for every PO — price, agency, agent, and any dates Accounts has already typed in by hand. Upload it any time a fresh export comes in.</p>
+  <ol class="steps">
+    <li><span class="stepnum">1</span><span class="body">Go to <strong>Master Report</strong> in the top navigation and choose your file.</span></li>
+    <li><span class="stepnum">2</span><span class="body">The tool reads every PO, creates any brand-new ones, and updates prices, dates, and agency/agent info on existing ones.</span></li>
+    <li><span class="stepnum">3</span><span class="body">You'll land on an <strong>import review panel</strong> — nothing here blocks the upload, but it's worth a glance: a typo'd Agency Code, a PO whose status just changed, a gap in the PO number sequence.</span></li>
+    <li><span class="stepnum">4</span><span class="body">If anything newly qualifies for commission (a paid-date that's already on the sheet, for instance), you'll see a link to review and confirm it.</span></li>
+  </ol>
+  <div class="callout tip">
+    <span class="label">Re-uploading is always safe</span>
+    <p>The Master Report can be re-uploaded as often as you like. It only ever fills in a blank — a paid-date, commission-paid date, or anything else Accounts has already typed in by hand is never overwritten by a later upload.</p>
+  </div>
+
+  <h2 id="aor-report"><span class="num">2</span>Uploading an AOR Report</h2>
+  <p>The AOR (Acknowledgment of Receipt) export is Kenjin's list of actual payment receipts. Uploading it fills in a contract's paid-date columns automatically, instead of Accounts cross-checking it by hand and typing dates into the Master Report — once a paid-date is filled in, everything downstream (detection, commission, reports) works exactly the same either way.</p>
+  <ol class="steps">
+    <li><span class="stepnum">1</span><span class="body">Go to <strong>AOR Report</strong> and choose your file.</span></li>
+    <li><span class="stepnum">2</span><span class="body">Enter the date range you're processing (based on each receipt's own <strong>Acknowledgment Receipt Date</strong> — the day the payment was actually receipted, not the PO's own purchase date). The real Kenjin export is never cut on clean month boundaries, so pick whatever range you're working through today.</span></li>
+    <li><span class="stepnum">3</span><span class="body">Every receipt in that range gets classified and applied. A receipt outside the range, or with no date at all, is left completely untouched — it's still available the next time you process a range that covers it.</span></li>
+  </ol>
+  <p>Only three things ever trigger commission, no matter how they're worded in the file:</p>
+  <table>
+    <tr><th>What the receipt says</th><th>Trigger</th></tr>
+    <tr><td><code>FULL PAYMENT</code>, <code>BALANCE PAYMENT</code>, or <code>EARLY SETTLEMENT</code> (no instalment tag)</td><td>Full Payment</td></tr>
+    <tr><td>An <code>(INST 01/xx)</code> tag anywhere in the text</td><td>Instalment 1</td></tr>
+    <tr><td>An <code>(INST 06/xx)</code> tag anywhere in the text</td><td>Instalment 6 (Balance)</td></tr>
+  </table>
+  <p class="muted">A <code>DEPOSIT</code>, plain <code>PARTIAL PAYMENT</code> (the typo <code>PATRIAL PAYMENT</code> counts too), or <code>STAMP DUTY</code> is recorded but doesn't trigger anything — it's a step along the way, not a commission event. Anything the system doesn't recognize gets flagged for a human to look at rather than guessed at.</p>
+  <div class="callout warn">
+    <span class="label">Upload order doesn't matter</span>
+    <p>If an AOR receipt arrives for a PO whose Master Report hasn't been uploaded yet, it isn't lost — it's simply left for a future AOR upload (even the exact same file, re-uploaded once the PO exists). You never need to worry about getting the order right.</p>
+  </div>
+
+  <h2 id="review-confirm"><span class="num">3</span>Reviewing &amp; confirming</h2>
+  <p>Detecting something as newly due is never the same as it being confirmed. Nothing shows up on a downloadable report until a human has confirmed it.</p>
+  <ul>
+    <li><strong>Past Reports → Awaiting review</strong> lists every run that raised something new but hasn't been confirmed yet.</li>
+    <li>Open a run, tick the rows you want to confirm, and click <strong>Confirm selected</strong>. Anything left unticked stays pending for later — nothing is lost.</li>
+  </ul>
+
+  <h2 id="reports"><span class="num">4</span>Downloading reports</h2>
+  <h3>Past confirmed reports</h3>
+  <p>Every run with at least one confirmed commission stays listed under <strong>Past Reports</strong>, however long ago it happened. The Excel file always reflects the full ledger as it stands today, not a snapshot from the moment it was first processed.</p>
+  <h3>Overall Commission by period</h3>
+  <p>Pick a start and end date to get every PO purchased in that range, with whatever's been confirmed for it so far. A PO purchased in June whose commission gets confirmed in August stays on June's report — re-download it any time to pick up that late confirmation.</p>
+  <h3>Annotated AOR copy</h3>
+  <p>Every AOR file you've ever uploaded stays downloadable with three extra sheets added, scoped to whichever PO purchase month you pick:</p>
+  <ul>
+    <li><strong>Payments (PO Date)</strong> — every receipt in that month, exactly as the file has it.</li>
+    <li><strong>Valid Payments (PO Date)</strong> — narrowed to the ones that actually matter for commission, colored green (full payment) or yellow (Instalment 1/6), the same way this used to get marked up by hand.</li>
+    <li><strong>Boundary Payments (PO Date)</strong> — a receipt sitting exactly one day before or after the month you picked. Kenjin sometimes statements a receipt the calendar day after the real purchase date, which can quietly push it into the wrong month. This sheet doesn't decide for you — it just puts the borderline case in front of you to check.</li>
+  </ul>
+
+  <h2 id="fixing-mistakes"><span class="num">5</span>Fixing a mistake</h2>
+  <p>Which tool you reach for depends on what was actually wrong.</p>
+  <h3>The paid-date was right, only the commission math was wrong</h3>
+  <p>Open the run on <strong>Review</strong> and void the confirmed commission there, with a reason. It comes off every report immediately and the reason stays on record.</p>
+  <h3>The AOR data itself was wrong</h3>
+  <p>A receipt matched to the wrong PO, or a misread Reference No — use <strong>Void an AOR trigger</strong> on the Past Reports page: enter the PO No, pick the trigger (Full Payment / Instalment 1 / Instalment 6 — see the table above for which real-world wording maps to which trigger), and give a reason. This clears every receipt that fed it, blanks the paid-date, and voids or removes any commission raised from it.</p>
+  <p>After voiding, correct the underlying data and re-upload the AOR file (the same file works — the same Acknowledgment Receipt No is picked up again instead of being skipped as already-seen).</p>
+  <div class="callout warn">
+    <span class="label">Editing the AOR file yourself? Delete the row properly.</span>
+    <p>If you're removing a row from an AOR export by hand, actually <strong>delete</strong> it (right-click the row number → Delete), never just clear its contents. A row that's cleared but still sitting there blank looks, to the system, like the file's own trailing "Total" line — and everything after it silently stops being read. This one has genuinely happened, so it's worth doing right.</p>
+  </div>
+
+  <h2 id="agencies"><span class="num">6</span>Managing agencies</h2>
+  <p>The <strong>Agencies</strong> page lists every agency on file — its Code (what every upload actually matches against), its Name (for humans reading reports and this page), and its Format.</p>
+  <table>
+    <tr><th>Format</th><th>What it means</th></tr>
+    <tr><td>Single Table (XEMP-style)</td><td>Everyone shares one flat table — no per-agent breakdown.</td></tr>
+    <tr><td>Full Payout, Agent Breakdown (Lachesis-style)</td><td>Agency is paid the full commission, but the report still splits it into a sheet per agent for tracking.</td></tr>
+    <tr><td>Agency/Agent Split (AW Consultancy-style)</td><td>Agency and agent are paid separately, at different percentages.</td></tr>
+  </table>
+  <p>Click <strong>Add Agency</strong> to set one up ahead of time, or click any existing agency to edit its Name, Format, or even its Code. Renaming a code moves every one of its contracts across automatically — nothing gets orphaned.</p>
+  <div class="callout tip">
+    <span class="label">Once a name is set</span>
+    <p>Downloaded reports use that agency's Name as the sheet tab, instead of the raw code — set it once via this page and every future report picks it up.</p>
+  </div>
+  <p class="muted">Editing an agency's Format only affects commissions detected from here on — anything already raised or confirmed keeps the figures it was given at the time.</p>
+
+  <h2 id="good-to-know"><span class="num">7</span>Good to know</h2>
+  <ul>
+    <li><strong>A commission amount is only ever calculated once</strong>, the moment it's raised, and is never recalculated afterward — not by a later Master Report upload, not by anything. If a price was wrong, void the trigger, correct the price first, then reapply the AOR receipt so the fresh commission uses the corrected figure.</li>
+    <li><strong>"Payment Received (RM)" on the AOR file is not the commission amount.</strong> Commission is always a fixed percentage of Net Price (15% for a full payment, 7.5% each for Instalment 1 and 6) — the Payment Received column is purely informational.</li>
+    <li><strong>Full payment commission has a 5-day cooling-off gate</strong> — it only becomes releasable 5 days after the Full Settlement Paid Date, giving Accounts lead time before the real 10-day cooling-off period is up.</li>
+    <li><strong>A cumulative AOR export is completely normal.</strong> Kenjin re-lists old receipts every time, so seeing "0 new" on most of a re-upload isn't a problem — it means everything in it was already applied.</li>
+  </ul>
+
+  <footer>
+    Something not covered here, or behaving differently from what's described? Flag it — this guide gets updated as the tool does.
+  </footer>
+
+</div>
