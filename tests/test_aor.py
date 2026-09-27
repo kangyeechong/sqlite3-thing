@@ -1352,3 +1352,96 @@ def test_annotate_aor_file_includes_rows_after_a_blank_row(tmp_path):
     assert [r[0] for r in rows] == ["TRF 10/08/2026 (INST 06/24)"]
 
 
+def test_every_valid_trigger_plus_junk_and_a_blank_row_in_one_file(tmp_path):
+    """
+    End-to-end coverage of every real-world Reference No shape in one
+    upload: Instalment 1, Instalment 6, EARLY SETTLEMENT, BALANCE
+    PAYMENT (both completing the full price), a PARTIAL PAYMENT
+    (recognized, non-triggering), a garbled/unrecognized reference
+    (flagged for review), and a genuinely blank row mixed in between
+    them (the exact real bug fixed in _read_aor_rows - must not
+    truncate anything after it).
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [
+        {"No": 1, "PO No": 99101, "Customer ID": "CUSTT1", "Customer Name": "Test Instalment 1",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        {"No": 2, "PO No": 99102, "Customer ID": "CUSTT2", "Customer Name": "Test Instalment 6",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        {"No": 3, "PO No": 99103, "Customer ID": "CUSTT3", "Customer Name": "Test Early Settlement",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        {"No": 4, "PO No": 99104, "Customer ID": "CUSTT4", "Customer Name": "Test Balance Payment",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        {"No": 5, "PO No": 99105, "Customer ID": "CUSTT5", "Customer Name": "Test Partial Payment",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        {"No": 6, "PO No": 99106, "Customer ID": "CUSTT6", "Customer Name": "Test Unrecognized Crap",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+    ])
+    process_upload(db_path, str(xlsx_master), run_date=datetime.date(2026, 8, 10))
+
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {"No": 1, "Acknowledgment Receipt No": "RC-EVERY-0001", "PO No": 99101,
+         "Customer ID": "CUSTT1", "Customer Name": "Test Instalment 1",
+         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+         "Reference No": "TRF 10/08/2026 (INST 01/24)"},
+        {"No": 2, "Acknowledgment Receipt No": "RC-EVERY-0002", "PO No": 99106,
+         "Customer ID": "CUSTT6", "Customer Name": "Test Unrecognized Crap",
+         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+         "Reference No": "ASDKJ GARBLED NOT A REAL REFERENCE 999"},
+        {"No": 3, "Acknowledgment Receipt No": "RC-EVERY-0003", "PO No": 99102,
+         "Customer ID": "CUSTT2", "Customer Name": "Test Instalment 6",
+         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+         "Reference No": "TRF 10/08/2026 (INST 06/24)"},
+        {"No": 4, "Acknowledgment Receipt No": "RC-EVERY-0004", "PO No": 99103,
+         "Customer ID": "CUSTT3", "Customer Name": "Test Early Settlement",
+         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+         "Reference No": "TRF 10/08/2026 EARLY SETTLEMENT"},
+        {"No": 5, "Acknowledgment Receipt No": "RC-EVERY-0005", "PO No": 99104,
+         "Customer ID": "CUSTT4", "Customer Name": "Test Balance Payment",
+         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+         "Reference No": "TRF 10/08/2026 BALANCE PAYMENT"},
+        {"No": 6, "Acknowledgment Receipt No": "RC-EVERY-0006", "PO No": 99105,
+         "Customer ID": "CUSTT5", "Customer Name": "Test Partial Payment",
+         "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+         "Reference No": "G V0000 PARTIAL PAYMENT"},
+    ])
+    # A blank row (cleared, not deleted) mixed in right in the middle -
+    # every row below it must still be read (see _read_aor_rows).
+    workbook = openpyxl.load_workbook(xlsx_aor)
+    sheet = workbook.active
+    sheet.insert_rows(26)  # row 23 = No 1, ..., row 26 lands between No 3 and No 4
+    workbook.save(xlsx_aor)
+
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 25))
+    import_result = result["import_result"]
+
+    assert import_result.receipts_imported == 6
+    assert import_result.paid_dates_written == 4  # inst 1, inst 6, and 2 full payments - not partial or crap
+    assert len(import_result.review_flags) == 1
+    assert import_result.review_flags[0].po_no == 99106
+    assert "doesn't match any known pattern" in import_result.review_flags[0].message
+
+    raised_by_po = {e["po_no"]: e for e in result["raised_events"]}
+    assert set(raised_by_po) == {99101, 99102, 99103, 99104}
+    assert raised_by_po[99101]["trigger_type"] == "installment_1"
+    assert raised_by_po[99101]["amount"] == 750.0
+    assert raised_by_po[99102]["trigger_type"] == "installment_6"
+    assert raised_by_po[99102]["amount"] == 750.0
+    assert raised_by_po[99103]["trigger_type"] == "full_payment"
+    assert raised_by_po[99103]["amount"] == 1500.0
+    assert raised_by_po[99104]["trigger_type"] == "full_payment"
+    assert raised_by_po[99104]["amount"] == 1500.0
+
+    conn = get_connection(db_path)
+    partial_contract = conn.execute(
+        "SELECT full_settlement_paid_date, first_installment_paid_date, sixth_installment_paid_date "
+        "FROM contracts WHERE po_no = 99105"
+    ).fetchone()
+    assert partial_contract["full_settlement_paid_date"] is None
+    assert partial_contract["first_installment_paid_date"] is None
+    assert partial_contract["sixth_installment_paid_date"] is None
+    conn.close()
+
+
