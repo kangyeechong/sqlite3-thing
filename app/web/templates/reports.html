@@ -4,7 +4,7 @@
   <h1>Past Reports</h1>
 
   <h2>Awaiting review</h2>
-  <p class="muted">Runs that raised something newly due but haven't been reviewed and confirmed yet - nothing here shows up in a downloaded report until you confirm it.</p>
+  <p class="muted">Newly detected, not yet confirmed - nothing here appears on a report until you confirm it.</p>
   {% if pending_runs %}
     <table>
       <tr><th>Run Date</th><th>Source File</th><th></th></tr>
@@ -21,7 +21,7 @@
   {% endif %}
 
   <h2>Confirmed reports</h2>
-  <p class="muted">Every commission run that's had at least one commission confirmed on it. The Excel report always reflects the full ledger as it stands today, not a snapshot from when the run was first processed. Made a mistake confirming something? Use "Review" to void it, with a reason.</p>
+  <p class="muted">Every run with at least one confirmed commission. The download always reflects today's full ledger, not a snapshot from when it was first processed - use "Review" to void a mistake.</p>
   {% if runs %}
     <table>
       <tr><th>Run Date</th><th>Source File</th><th></th><th></th></tr>
@@ -46,7 +46,7 @@
   {% endif %}
 
   <h2>Overall Commission by period</h2>
-  <p class="muted">Every PO purchased in the range you pick, with whatever commission has been confirmed for it so far - not the full ledger of every PO ever. A June PO whose installment gets confirmed in August stays on June's report (re-download it any time to pick up the late confirmation), never August's.</p>
+  <p class="muted">Every PO purchased in the range you pick, with whatever's been confirmed so far. A PO stays on its own purchase month's report even if confirmed much later - re-download any time to pick that up.</p>
   <form method="get" action="{{ url_for('web.download_period') }}">
     <label>Period start
       <input type="date" name="period_start" required>
@@ -58,7 +58,7 @@
   </form>
 
   <h2>Past AOR uploads</h2>
-  <p class="muted">Every AOR file ever uploaded, whether or not it happened to raise anything new that time - its annotated copy stays downloadable here. Pick the PO purchase month you want the annotated copy narrowed to.</p>
+  <p class="muted">Every AOR file ever uploaded. Pick a PO purchase month below to download its annotated copy narrowed to that month.</p>
   {% if aor_uploads %}
     <table>
       <tr><th>Uploaded At</th><th>Source File</th><th>PO Months</th><th>Status</th><th></th></tr>
@@ -69,7 +69,7 @@
           <td>{{ upload.po_months or "" }}</td>
           <td>
             {% if upload.voided_receipt_count %}
-              <span title="Voided receipts from this upload haven't been reapplied yet - re-upload a corrected AOR file to fix this.">&#9888; {{ upload.voided_receipt_count }} voided - needs reapplying</span>
+              <span class="badge badge-warning" title="Re-upload a corrected AOR file to fix this.">&#9888; {{ upload.voided_receipt_count }} voided - needs reapplying</span>
             {% endif %}
           </td>
           <td>
@@ -94,7 +94,7 @@
   {% endif %}
 
   <h2>Void an AOR trigger</h2>
-  <p class="muted">Made a mistake in an AOR upload itself - a receipt matched to the wrong PO, a misread Reference No, or anything else where the underlying data (not just the commission math) was wrong? Voiding a PO's trigger here clears every AOR receipt that fed it, resets its paid-date to blank, and voids any commission event already raised from it - then re-upload a corrected AOR file to reapply it once the data's right. If a wrongly-<em>confirmed</em> commission just needs redoing with the same, correct paid-date, use "Review" on the confirmed run instead - this is only for when the AOR data itself was wrong.</p>
+  <p class="muted">For when the AOR data itself was wrong (wrong PO, misread reference) - clears the receipt and paid-date so a corrected re-upload can reapply. If the data was right and only the commission math was wrong, void it from "Review" instead.</p>
   <form method="post" action="{{ url_for('web.void_aor_trigger_route') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>PO No
@@ -110,7 +110,7 @@
     <label>Reason
       <input type="text" name="reason" required>
     </label>
-    <button class="button" type="submit">Void</button>
+    <button class="button button-danger" type="submit">Void</button>
   </form>
 
   <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>

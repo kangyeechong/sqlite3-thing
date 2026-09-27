@@ -2,7 +2,7 @@
 {% block title %}Edit Agency{% endblock %}
 {% block content %}
   <h1>Edit Agency</h1>
-  <p class="muted">Only affects commissions detected from now on - anything already raised or confirmed keeps the numbers it was given at the time. Changing the Code moves every one of this agency's contracts over to the new code.</p>
+  <p class="muted">Only affects commissions detected from now on. Changing the Code moves every one of this agency's contracts to the new code.</p>
   <form method="post" action="{{ url_for('web.edit_agency', agency_code=agency.agency_code) }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <label>Agency Code

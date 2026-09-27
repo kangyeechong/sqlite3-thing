@@ -5,7 +5,7 @@
 
   <h2>Pending your confirmation</h2>
   {% if pending_events %}
-    <p class="muted">These were detected automatically but nothing has been sent to Accounts yet - nothing is due, and no download is available, until you confirm them below.</p>
+    <p class="muted">Detected automatically - nothing's due, and no download is available, until you confirm below.</p>
     <form method="post" action="{{ url_for('web.confirm_review', run_id=run_id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <table>
@@ -31,7 +31,7 @@
 
   <h2>Confirmed this run</h2>
   {% if confirmed_events %}
-    <p class="muted">Made a mistake confirming one of these (wrong price, a receipt matched to the wrong PO)? Void it below with a reason - it comes off every report immediately, but nothing new appears until the underlying data is corrected and it's detected and confirmed again.</p>
+    <p class="muted">Made a mistake? Void it below with a reason - it comes off every report immediately.</p>
     <table>
       <tr><th>PO No</th><th>Customer</th><th>Agency</th><th>Agent</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th><th>Void</th></tr>
       {% for event in confirmed_events %}
@@ -48,7 +48,7 @@
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="event_id" value="{{ event.id }}">
               <input type="text" name="reason" placeholder="Reason (required)" required>
-              <button type="submit" class="button">Void</button>
+              <button type="submit" class="button button-danger">Void</button>
             </form>
           </td>
         </tr>

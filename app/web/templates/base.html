@@ -5,22 +5,156 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Agent Commission Tool{% endblock %}</title>
   <style>
-    body { font-family: Arial, Helvetica, sans-serif; max-width: 920px; margin: 40px auto; padding: 0 20px; color: #22282a; }
-    nav { display: flex; justify-content: space-between; align-items: baseline; margin-bottom: 28px; border-bottom: 1px solid #dad4c6; padding-bottom: 14px; }
-    nav strong { font-size: 18px; }
-    nav a { color: #6b4f28; }
-    h1 { font-size: 24px; }
-    h2 { font-size: 18px; margin-top: 32px; color: #6b4f28; }
-    table { border-collapse: collapse; width: 100%; margin: 12px 0 24px; }
-    th, td { border: 1px solid #dad4c6; padding: 8px 10px; text-align: left; font-size: 14px; }
-    th { background: #f3f2ec; }
-    .flash { background: #f3e8d6; border-left: 3px solid #a9762c; padding: 10px 14px; margin-bottom: 20px; }
-    .button { display: inline-block; background: #8b6b3d; color: white; padding: 9px 18px; text-decoration: none; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; }
-    .button:hover { background: #6b4f28; }
-    .money { font-family: "Courier New", monospace; text-align: right; }
+    :root {
+      --ink: #23201b;
+      --ink-soft: #55503f;
+      --paper: #fbf9f4;
+      --panel: #ffffff;
+      --line: #ddd3bf;
+      --accent: #8b6b3d;
+      --accent-deep: #5f4522;
+      --accent-tint: #f3e8d6;
+      --muted: #6b6459;
+      --row-alt: #f7f4ec;
+      --row-hover: #efe7d5;
+
+      --success-ink: #1f5b34;
+      --success-bg: #e8f3ea;
+      --success-line: #3f8a55;
+
+      --error-ink: #7a2020;
+      --error-bg: #fbeceb;
+      --error-line: #b23a3a;
+
+      --warning-ink: #6b4715;
+      --warning-bg: #fdf1de;
+      --warning-line: #c98a2e;
+
+      color-scheme: light;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --ink: #ece7dd;
+        --ink-soft: #c9c2b4;
+        --paper: #1a1814;
+        --panel: #232019;
+        --line: #423c30;
+        --accent: #d3a35e;
+        --accent-deep: #e6bd7c;
+        --accent-tint: #362b18;
+        --muted: #a39a8a;
+        --row-alt: #211e17;
+        --row-hover: #2c2718;
+
+        --success-ink: #a8dab6;
+        --success-bg: #1c2f1f;
+        --success-line: #3f8a55;
+
+        --error-ink: #f0b3b0;
+        --error-bg: #3a1e1c;
+        --error-line: #b23a3a;
+
+        --warning-ink: #f0c98a;
+        --warning-bg: #3a2c12;
+        --warning-line: #c98a2e;
+
+        color-scheme: dark;
+      }
+    }
+
+    * { box-sizing: border-box; }
+    body {
+      font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      max-width: 960px;
+      margin: 0 auto;
+      padding: 32px 20px 80px;
+      color: var(--ink);
+      background: var(--paper);
+      line-height: 1.5;
+      font-size: 15px;
+    }
+    nav {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+      margin-bottom: 32px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 16px;
+    }
+    nav strong { font-size: 19px; color: var(--accent-deep); letter-spacing: -0.01em; }
+    nav a { color: var(--accent-deep); text-decoration: none; }
+    nav a:hover { text-decoration: underline; }
+    h1 { font-size: 25px; margin: 0 0 20px; color: var(--ink); letter-spacing: -0.01em; }
+    h2 {
+      font-size: 17px;
+      margin-top: 40px;
+      margin-bottom: 6px;
+      color: var(--accent-deep);
+      padding-top: 16px;
+      border-top: 1px solid var(--line);
+    }
+    h2:first-of-type { border-top: none; padding-top: 0; }
+
+    table { border-collapse: collapse; width: 100%; margin: 10px 0 24px; background: var(--panel); }
+    th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; font-size: 14px; }
+    th { background: var(--accent-tint); color: var(--accent-deep); font-weight: 600; }
+    tbody tr:nth-child(even) { background: var(--row-alt); }
+    tbody tr:hover { background: var(--row-hover); }
+
+    .flash { border-left: 4px solid var(--muted); border-radius: 0 6px 6px 0; padding: 10px 14px; margin-bottom: 14px; background: var(--panel); }
+    .flash-success { border-color: var(--success-line); background: var(--success-bg); color: var(--success-ink); }
+    .flash-error { border-color: var(--error-line); background: var(--error-bg); color: var(--error-ink); }
+    .flash-warning { border-color: var(--warning-line); background: var(--warning-bg); color: var(--warning-ink); }
+    .flash-message { border-color: var(--warning-line); background: var(--warning-bg); color: var(--warning-ink); }
+
+    .button {
+      display: inline-block;
+      background: var(--accent);
+      color: white;
+      padding: 9px 18px;
+      text-decoration: none;
+      border-radius: 6px;
+      border: none;
+      cursor: pointer;
+      font-size: 14px;
+      font-weight: 600;
+    }
+    .button:hover { background: var(--accent-deep); }
+    .button-danger { background: var(--panel); color: var(--error-line); border: 1.5px solid var(--error-line); }
+    .button-danger:hover { background: var(--error-bg); color: var(--error-ink); }
+
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      padding: 2px 9px;
+      border-radius: 999px;
+      font-size: 12.5px;
+      font-weight: 600;
+      white-space: nowrap;
+    }
+    .badge-warning { background: var(--warning-bg); color: var(--warning-ink); border: 1px solid var(--warning-line); }
+    .badge-success { background: var(--success-bg); color: var(--success-ink); border: 1px solid var(--success-line); }
+    .badge-neutral { background: var(--row-alt); color: var(--muted); border: 1px solid var(--line); }
+
+    .money { font-family: "SFMono-Regular", Consolas, "Courier New", monospace; text-align: right; font-variant-numeric: tabular-nums; }
     label { display: block; margin-bottom: 14px; font-size: 14px; }
-    input[type=email], input[type=password] { display: block; margin-top: 4px; padding: 8px; width: 260px; border: 1px solid #dad4c6; border-radius: 4px; }
-    .muted { color: #5c6467; font-size: 13.5px; }
+    input[type=email], input[type=password], input[type=text], input[type=number], input[type=date], input[type=file], select {
+      display: block;
+      margin-top: 4px;
+      padding: 8px;
+      width: 260px;
+      max-width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 4px;
+      background: var(--panel);
+      color: var(--ink);
+      font-size: 14px;
+      font-family: inherit;
+    }
+    .muted { color: var(--muted); font-size: 13.5px; }
   </style>
 </head>
 <body>
@@ -30,10 +164,10 @@
       <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.upload') }}">Master Report</a> &middot; <a href="{{ url_for('web.upload_aor') }}">AOR Report</a> &middot; <a href="{{ url_for('web.reports') }}">Past Reports</a> &middot; <a href="{{ url_for('web.agencies') }}">Agencies</a> &middot; <a href="{{ url_for('web.logout') }}">Log out</a></span>
     {% endif %}
   </nav>
-  {% with messages = get_flashed_messages() %}
+  {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
-      {% for message in messages %}
-        <div class="flash">{{ message }}</div>
+      {% for category, message in messages %}
+        <div class="flash flash-{{ category }}">{{ message }}</div>
       {% endfor %}
     {% endif %}
   {% endwith %}
