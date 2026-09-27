@@ -423,6 +423,50 @@ def test_upload_without_a_valid_csrf_token_is_rejected(client, tmp_path):
     assert response.status_code == 400
 
 
+def test_a_stale_csrf_token_shows_the_apps_own_styled_page_not_a_raw_error(client, tmp_path):
+    """
+    Regression test for a real scenario: logging out clears the
+    session, which regenerates the CSRF token - so a second tab, or the
+    back button, still holding an old rendered form produces exactly
+    this failure on submit. Flask's own default 400 page is bare HTML
+    with no nav and no way back except retyping the URL; to a
+    non-technical user that reads as "the login is broken." This must
+    render inside the app's own layout instead, with a working way to
+    retry.
+    """
+    _login(client)
+    client.get("/logout")  # regenerates the session's csrf_token
+
+    response = client.post(
+        "/login",
+        data={"email": "staff@xekl.com", "password": "correct-horse-battery", "csrf_token": "a-stale-token"},
+    )
+    assert response.status_code == 400
+    assert b"Agent Commission Tool" in response.data  # the app's own nav, not Flask's bare error page
+    assert b"Try again" in response.data
+
+    # The "Try again" link must land somewhere that actually works -
+    # a fresh GET regenerates a valid token, so a real retry succeeds.
+    retry_page = client.get("/login")
+    assert retry_page.status_code == 200
+    token = _csrf_token(client, "/login")
+    retry_response = client.post(
+        "/login",
+        data={"email": "staff@xekl.com", "password": "correct-horse-battery", "csrf_token": token},
+        follow_redirects=True,
+    )
+    assert retry_response.status_code == 200
+    assert b"Upload Commission Base Report" in retry_response.data
+
+
+def test_a_missing_page_shows_the_apps_own_styled_page_not_a_raw_error(client):
+    _login(client)
+    response = client.get("/download/999999")
+    assert response.status_code == 404
+    assert b"Agent Commission Tool" in response.data
+    assert b"Not found" in response.data
+
+
 def test_malicious_filename_cannot_escape_the_temp_directory(client, tmp_path):
     """
     A filename crafted to look like a path-traversal or absolute-path

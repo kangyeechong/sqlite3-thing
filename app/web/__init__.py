@@ -10,7 +10,7 @@ import os
 import sys
 import warnings
 
-from flask import Flask, redirect, url_for
+from flask import Flask, redirect, render_template, request, session, url_for
 
 from ..db.connection import init_db
 from .csrf import get_csrf_token
@@ -84,5 +84,51 @@ def create_app(db_path, secret_key=None):
     @app.route("/")
     def index():
         return redirect(url_for("web.upload"))
+
+    def _fallback_continue_url():
+        return url_for("web.upload") if session.get("user_email") else url_for("web.login")
+
+    def _continue_url():
+        # Prefer sending them right back to the page they were on (a
+        # fresh GET there regenerates a valid CSRF token automatically,
+        # so a retry just works) - only when it's actually this app's
+        # own page, never an external URL a crafted Referer could point
+        # at, and never the same request path that just failed (a POST
+        # endpoint has no matching GET page to land back on safely).
+        referrer = request.referrer
+        if referrer and referrer.startswith(request.host_url) and referrer.rstrip("/") != request.url.rstrip("/"):
+            return referrer
+        return _fallback_continue_url()
+
+    @app.errorhandler(400)
+    def handle_bad_request(error):
+        # Most often this is the stale-CSRF-token case (see
+        # app.web.csrf.validate_csrf_token) - real and reproducible any
+        # time the session's token has changed (every logout does this)
+        # while an old copy of a form is still sitting in the browser
+        # (a second tab, the back button). Flask's own default 400 page
+        # is bare HTML with no nav and no way back except retyping the
+        # URL - to a non-technical user that reads as "the login is
+        # broken," not "reload and try again." This renders the same
+        # message inside the app's own layout, with a link that either
+        # returns to the form they were just on (so a retry just works)
+        # or a sensible fallback.
+        return render_template(
+            "error.html",
+            heading="Something went wrong",
+            message=error.description or "That request couldn't be processed.",
+            continue_url=_continue_url(),
+            continue_label="Try again",
+        ), 400
+
+    @app.errorhandler(404)
+    def handle_not_found(error):
+        return render_template(
+            "error.html",
+            heading="Not found",
+            message=error.description or "That page or item doesn't exist.",
+            continue_url=_fallback_continue_url(),
+            continue_label="Back to " + ("Upload" if session.get("user_email") else "Log in"),
+        ), 404
 
     return app
