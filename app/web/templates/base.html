@@ -32,34 +32,68 @@
 
       color-scheme: light;
     }
+    /* Dark palette applies two ways: automatically when the OS/browser
+       prefers dark and the toggle hasn't overridden it (the
+       :not([data-theme="light"]) guard), or explicitly whenever the
+       toggle below has set data-theme="dark" - kept deliberately
+       softer than nearly-black (a warm dark grey, not #000) since a
+       harsh true-black background reads as much darker on screen than
+       it looks in an editor. */
     @media (prefers-color-scheme: dark) {
-      :root {
-        --ink: #ece7dd;
-        --ink-soft: #c9c2b4;
-        --paper: #1a1814;
-        --panel: #232019;
-        --line: #423c30;
-        --accent: #d3a35e;
-        --accent-deep: #e6bd7c;
-        --accent-tint: #362b18;
-        --muted: #a39a8a;
-        --row-alt: #211e17;
-        --row-hover: #2c2718;
+      :root:not([data-theme="light"]) {
+        --ink: #e8e3d8;
+        --ink-soft: #c4bcac;
+        --paper: #2a2620;
+        --panel: #35302a;
+        --line: #534a3c;
+        --accent: #d9ab68;
+        --accent-deep: #ecc283;
+        --accent-tint: #40361f;
+        --muted: #a89e8d;
+        --row-alt: #302b24;
+        --row-hover: #3d372c;
 
         --success-ink: #a8dab6;
-        --success-bg: #1c2f1f;
-        --success-line: #3f8a55;
+        --success-bg: #253829;
+        --success-line: #4f9c63;
 
-        --error-ink: #f0b3b0;
-        --error-bg: #3a1e1c;
-        --error-line: #b23a3a;
+        --error-ink: #f5c2be;
+        --error-bg: #422924;
+        --error-line: #e2665d;
 
         --warning-ink: #f0c98a;
-        --warning-bg: #3a2c12;
-        --warning-line: #c98a2e;
+        --warning-bg: #423319;
+        --warning-line: #d99b3d;
 
         color-scheme: dark;
       }
+    }
+    :root[data-theme="dark"] {
+      --ink: #e8e3d8;
+      --ink-soft: #c4bcac;
+      --paper: #2a2620;
+      --panel: #35302a;
+      --line: #534a3c;
+      --accent: #d9ab68;
+      --accent-deep: #ecc283;
+      --accent-tint: #40361f;
+      --muted: #a89e8d;
+      --row-alt: #302b24;
+      --row-hover: #3d372c;
+
+      --success-ink: #a8dab6;
+      --success-bg: #253829;
+      --success-line: #4f9c63;
+
+      --error-ink: #f5c2be;
+      --error-bg: #422924;
+      --error-line: #e2665d;
+
+      --warning-ink: #f0c98a;
+      --warning-bg: #423319;
+      --warning-line: #d99b3d;
+
+      color-scheme: dark;
     }
 
     * { box-sizing: border-box; }
@@ -155,15 +189,59 @@
       font-family: inherit;
     }
     .muted { color: var(--muted); font-size: 13.5px; }
+
+    .theme-toggle {
+      background: transparent;
+      border: 1px solid var(--line);
+      color: var(--ink-soft);
+      border-radius: 6px;
+      padding: 4px 10px;
+      font-size: 12.5px;
+      font-family: inherit;
+      cursor: pointer;
+    }
+    .theme-toggle:hover { border-color: var(--accent); color: var(--accent-deep); }
   </style>
+  <script>
+    // Applied before paint (head, synchronous) so a stored preference
+    // never flashes the other theme for a moment on load. Only ever
+    // sets data-theme when the person has actually clicked the toggle
+    // below - until then this is absent and the OS/browser's own
+    // prefers-color-scheme decides, same as before this existed.
+    (function () {
+      try {
+        var stored = localStorage.getItem("theme");
+        if (stored === "light" || stored === "dark") {
+          document.documentElement.setAttribute("data-theme", stored);
+        }
+      } catch (e) {}
+    })();
+  </script>
 </head>
 <body>
   <nav>
     <strong>Agent Commission Tool</strong>
-    {% if session.get('user_email') %}
-      <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.upload') }}">Master Report</a> &middot; <a href="{{ url_for('web.upload_aor') }}">AOR Report</a> &middot; <a href="{{ url_for('web.reports') }}">Past Reports</a> &middot; <a href="{{ url_for('web.agencies') }}">Agencies</a> &middot; <a href="{{ url_for('web.logout') }}">Log out</a></span>
-    {% endif %}
+    <span style="display:flex; align-items:center; gap:16px;">
+      {% if session.get('user_email') %}
+        <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.upload') }}">Master Report</a> &middot; <a href="{{ url_for('web.upload_aor') }}">AOR Report</a> &middot; <a href="{{ url_for('web.reports') }}">Past Reports</a> &middot; <a href="{{ url_for('web.agencies') }}">Agencies</a> &middot; <a href="{{ url_for('web.logout') }}">Log out</a></span>
+      {% endif %}
+      <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch between light and dark mode">&#9680; Theme</button>
+    </span>
   </nav>
+  <script>
+    (function () {
+      var button = document.getElementById("theme-toggle");
+      button.addEventListener("click", function () {
+        var current = document.documentElement.getAttribute("data-theme");
+        var isDark = current
+          ? current === "dark"
+          : window.matchMedia("(prefers-color-scheme: dark)").matches;
+        var next = isDark ? "light" : "dark";
+        document.documentElement.setAttribute("data-theme", next);
+        try { localStorage.setItem("theme", next); } catch (e) {}
+      });
+    })();
+  </script>
   {% with messages = get_flashed_messages(with_categories=true) %}
     {% if messages %}
       {% for category, message in messages %}
