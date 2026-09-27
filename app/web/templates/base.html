@@ -30,7 +30,7 @@
       --warning-bg: #fdf1de;
       --warning-line: #c98a2e;
 
-      --pattern-dot: rgba(139, 107, 61, 0.07);
+      --pattern-ink: rgba(139, 107, 61, 0.07);
 
       color-scheme: light;
     }
@@ -67,7 +67,7 @@
         --warning-bg: #423319;
         --warning-line: #d99b3d;
 
-        --pattern-dot: rgba(217, 171, 104, 0.06);
+        --pattern-ink: rgba(217, 171, 104, 0.06);
 
         color-scheme: dark;
       }
@@ -97,21 +97,25 @@
       --warning-bg: #423319;
       --warning-line: #d99b3d;
 
-      --pattern-dot: rgba(217, 171, 104, 0.06);
+      --pattern-ink: rgba(217, 171, 104, 0.06);
 
       color-scheme: dark;
     }
 
     * { box-sizing: border-box; }
     html {
-      /* A faint dot-grid, evenly spaced - the same ruled-paper texture
-         a real ledger sheet has, just quiet enough to never compete
-         with the content sitting on top of it. Fixed to the viewport
-         (not the scrolling body) so it reads as the page's own surface
-         rather than something that scrolls with the content. */
+      /* A faint linen weave - a fine diagonal crosshatch, quiet enough
+         to read as texture on the page's surface rather than a pattern
+         competing with the content sitting on top of it. Fixed to the
+         viewport (not the scrolling body) so it stays put as the page
+         scrolls, and tiles indefinitely regardless of how long any
+         given page is (unlike a gradient anchored to the page's own
+         corners, which would look different on a short login page
+         versus a long Reports page). */
       background-color: var(--paper);
-      background-image: radial-gradient(circle, var(--pattern-dot) 1.5px, transparent 1.5px);
-      background-size: 26px 26px;
+      background-image:
+        repeating-linear-gradient(45deg, var(--pattern-ink) 0, var(--pattern-ink) 1px, transparent 1px, transparent 7px),
+        repeating-linear-gradient(-45deg, var(--pattern-ink) 0, var(--pattern-ink) 1px, transparent 1px, transparent 7px);
       background-attachment: fixed;
       min-height: 100%;
     }
