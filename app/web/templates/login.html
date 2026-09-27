@@ -1,15 +1,15 @@
 {% extends "base.html" %}
-{% block title %}Log in{% endblock %}
+{% block title %}{{ t("login.heading") }}{% endblock %}
 {% block content %}
-  <h1>Log in</h1>
+  <h1>{{ t("login.heading") }}</h1>
   <form method="post">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Email
+    <label>{{ t("login.email") }}
       <input type="email" name="email" required autofocus>
     </label>
-    <label>Password
+    <label>{{ t("login.password") }}
       <input type="password" name="password" required>
     </label>
-    <button class="button" type="submit">Log in</button>
+    <button class="button" type="submit">{{ t("login.submit") }}</button>
   </form>
 {% endblock %}

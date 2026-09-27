@@ -1031,3 +1031,32 @@ def test_renaming_an_agency_to_a_code_already_in_use_is_rejected(client):
     assert b"already exists" in response.data
 
 
+def test_switching_language_translates_the_page(client):
+    token = _csrf_token(client, "/login")
+    response = client.post("/lang", data={"code": "zh", "csrf_token": token}, follow_redirects=True)
+    assert response.status_code == 200
+    assert "登入".encode("utf-8") in response.data
+
+
+def test_switching_to_an_unknown_language_code_is_rejected(client):
+    token = _csrf_token(client, "/login")
+    response = client.post("/lang", data={"code": "fr", "csrf_token": token})
+    assert response.status_code == 400
+
+
+def test_switching_language_without_a_valid_csrf_token_is_rejected(client):
+    response = client.post("/lang", data={"code": "zh", "csrf_token": "made-up-token"})
+    assert response.status_code == 400
+
+
+def test_switching_language_redirects_back_to_the_referring_page(client):
+    token = _csrf_token(client, "/login")
+    response = client.post(
+        "/lang",
+        data={"code": "ms", "csrf_token": token},
+        headers={"Referer": "http://localhost/login"},
+    )
+    assert response.status_code == 302
+    assert response.headers["Location"] == "http://localhost/login"
+
+

@@ -1,10 +1,10 @@
 {% extends "base.html" %}
-{% block title %}Past Reports{% endblock %}
+{% block title %}{{ t("reports.heading") }}{% endblock %}
 {% block content %}
-  <h1>Past Reports</h1>
+  <h1>{{ t("reports.heading") }}</h1>
 
-  <h2>Awaiting review</h2>
-  <p class="muted">Newly detected, not yet confirmed - nothing here appears on a report until you confirm it.</p>
+  <h2>{{ t("reports.awaiting_review_heading") }}</h2>
+  <p class="muted">{{ t("reports.awaiting_review_help") }}</p>
   {% if pending_runs %}
     <table>
       <tr><th>Run Date</th><th>Source File</th><th></th></tr>
@@ -12,16 +12,16 @@
         <tr>
           <td>{{ run.run_date }}</td>
           <td>{{ run.source_filename or "" }}</td>
-          <td><a class="button" href="{{ url_for('web.review', run_id=run.id) }}">Review &amp; confirm</a></td>
+          <td><a class="button" href="{{ url_for('web.review', run_id=run.id) }}">{{ t("action.review_confirm") }}</a></td>
         </tr>
       {% endfor %}
     </table>
   {% else %}
-    <p class="muted">Nothing waiting on you right now.</p>
+    <p class="muted">{{ t("reports.awaiting_review_empty") }}</p>
   {% endif %}
 
-  <h2>Confirmed reports</h2>
-  <p class="muted">Every run with at least one confirmed commission. The download always reflects today's full ledger, not a snapshot from when it was first processed - use "Review" to void a mistake.</p>
+  <h2>{{ t("reports.confirmed_heading") }}</h2>
+  <p class="muted">{{ t("reports.confirmed_help") }}</p>
   {% if runs %}
     <table>
       <tr><th>Run Date</th><th>Source File</th><th></th><th></th></tr>
@@ -29,36 +29,36 @@
         <tr{% if loop.index > 5 %} class="hidden-row" style="display:none"{% endif %}>
           <td>{{ run.run_date }}</td>
           <td>{{ run.source_filename or "" }}</td>
-          <td><a href="{{ url_for('web.download', run_id=run.id) }}">Download Excel report</a></td>
-          <td><a href="{{ url_for('web.review', run_id=run.id) }}">Review</a></td>
+          <td><a href="{{ url_for('web.download', run_id=run.id) }}">{{ t("action.download_excel_report") }}</a></td>
+          <td><a href="{{ url_for('web.review', run_id=run.id) }}">{{ t("action.review") }}</a></td>
         </tr>
       {% endfor %}
       {% if runs|length > 5 %}
         <tr>
           <td colspan="4">
-            <button type="button" class="button" onclick="this.closest('table').querySelectorAll('.hidden-row').forEach(function(r){r.style.display='table-row';}); this.closest('tr').style.display='none';">Show {{ runs|length - 5 }} more</button>
+            <button type="button" class="button" onclick="this.closest('table').querySelectorAll('.hidden-row').forEach(function(r){r.style.display='table-row';}); this.closest('tr').style.display='none';">{{ t("reports.show_more", count=runs|length - 5) }}</button>
           </td>
         </tr>
       {% endif %}
     </table>
   {% else %}
-    <p class="muted">Nothing confirmed yet - once a commission run has at least one confirmed commission, it'll show up here.</p>
+    <p class="muted">{{ t("reports.confirmed_empty") }}</p>
   {% endif %}
 
-  <h2>Overall Commission by period</h2>
-  <p class="muted">Every PO purchased in the range you pick, with whatever's been confirmed so far. A PO stays on its own purchase month's report even if confirmed much later - re-download any time to pick that up.</p>
+  <h2>{{ t("reports.period_heading") }}</h2>
+  <p class="muted">{{ t("reports.period_help") }}</p>
   <form method="get" action="{{ url_for('web.download_period') }}">
-    <label>Period start
+    <label>{{ t("form.period_start") }}
       <input type="date" name="period_start" required>
     </label>
-    <label>Period end
+    <label>{{ t("form.period_end") }}
       <input type="date" name="period_end" required>
     </label>
-    <button class="button" type="submit">Download Overall Commission report</button>
+    <button class="button" type="submit">{{ t("reports.download_period_button") }}</button>
   </form>
 
-  <h2>Past AOR uploads</h2>
-  <p class="muted">Every AOR file ever uploaded. Pick a PO purchase month below to download its annotated copy narrowed to that month.</p>
+  <h2>{{ t("reports.aor_uploads_heading") }}</h2>
+  <p class="muted">{{ t("reports.aor_uploads_help") }}</p>
   {% if aor_uploads %}
     <table>
       <tr><th>Uploaded At</th><th>Source File</th><th>PO Months</th><th>Status</th><th></th></tr>
@@ -69,14 +69,14 @@
           <td>{{ upload.po_months or "" }}</td>
           <td>
             {% if upload.voided_receipt_count %}
-              <span class="badge badge-warning" title="Re-upload a corrected AOR file to fix this.">&#9888; {{ upload.voided_receipt_count }} voided - needs reapplying</span>
+              <span class="badge badge-warning" title="{{ t('reports.voided_badge_title') }}">&#9888; {{ t("reports.voided_badge", count=upload.voided_receipt_count) }}</span>
             {% endif %}
           </td>
           <td>
             <form method="get" action="{{ url_for('web.download_aor_annotated', upload_id=upload.id) }}">
-              <label>PO period start <input type="date" name="po_period_start" required></label>
-              <label>PO period end <input type="date" name="po_period_end" required></label>
-              <button class="button" type="submit">Download annotated copy</button>
+              <label>{{ t("form.po_period_start") }} <input type="date" name="po_period_start" required></label>
+              <label>{{ t("form.po_period_end") }} <input type="date" name="po_period_end" required></label>
+              <button class="button" type="submit">{{ t("aor_results.download_button") }}</button>
             </form>
           </td>
         </tr>
@@ -84,34 +84,34 @@
       {% if aor_uploads|length > 5 %}
         <tr>
           <td colspan="5">
-            <button type="button" class="button" onclick="this.closest('table').querySelectorAll('.hidden-row').forEach(function(r){r.style.display='table-row';}); this.closest('tr').style.display='none';">Show {{ aor_uploads|length - 5 }} more</button>
+            <button type="button" class="button" onclick="this.closest('table').querySelectorAll('.hidden-row').forEach(function(r){r.style.display='table-row';}); this.closest('tr').style.display='none';">{{ t("reports.show_more", count=aor_uploads|length - 5) }}</button>
           </td>
         </tr>
       {% endif %}
     </table>
   {% else %}
-    <p class="muted">No AOR files uploaded yet.</p>
+    <p class="muted">{{ t("reports.aor_uploads_empty") }}</p>
   {% endif %}
 
-  <h2>Void an AOR trigger</h2>
-  <p class="muted">For when the AOR data itself was wrong (wrong PO, misread reference) - clears the receipt and paid-date so a corrected re-upload can reapply. If the data was right and only the commission math was wrong, void it from "Review" instead.</p>
+  <h2>{{ t("reports.void_trigger_heading") }}</h2>
+  <p class="muted">{{ t("reports.void_trigger_help") }}</p>
   <form method="post" action="{{ url_for('web.void_aor_trigger_route') }}">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>PO No
+    <label>{{ t("form.po_no") }}
       <input type="number" name="po_no" required>
     </label>
-    <label>Trigger
+    <label>{{ t("form.trigger") }}
       <select name="trigger_type" required>
         {% for value, label in trigger_labels.items() %}
           <option value="{{ value }}">{{ label }}</option>
         {% endfor %}
       </select>
     </label>
-    <label>Reason
+    <label>{{ t("form.reason") }}
       <input type="text" name="reason" required>
     </label>
-    <button class="button button-danger" type="submit">Void</button>
+    <button class="button button-danger" type="submit">{{ t("action.void") }}</button>
   </form>
 
-  <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>
+  <p><a href="{{ url_for('web.upload') }}">{{ t("action.upload_another_file") }}</a></p>
 {% endblock %}

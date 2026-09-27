@@ -1,32 +1,31 @@
 {% extends "base.html" %}
-{% block title %}AOR Upload Results{% endblock %}
+{% block title %}{{ t("results.heading") }}{% endblock %}
 {% block content %}
-  <h1>Results</h1>
-  <p class="muted">Period processed: {{ period_start }} to {{ period_end }}.</p>
-  <p>{{ import_result.receipts_seen }} receipt{{ "" if import_result.receipts_seen == 1 else "s" }} read from the file
-     ({{ import_result.receipts_imported }} new, {{ import_result.paid_dates_written }} paid-date{{ "" if import_result.paid_dates_written == 1 else "s" }} filled in).</p>
+  <h1>{{ t("results.heading") }}</h1>
+  <p class="muted">{{ t("aor_results.period_processed", start=period_start, end=period_end) }}</p>
+  <p>{{ t("aor_results.receipts_summary_one" if import_result.receipts_seen == 1 else "aor_results.receipts_summary_many", seen=import_result.receipts_seen, new=import_result.receipts_imported, written=import_result.paid_dates_written, written_suffix=("" if import_result.paid_dates_written == 1 else "s")) }}</p>
   {% if import_result.receipts_outside_period %}
-    <p class="muted">{{ import_result.receipts_outside_period }} receipt{{ "" if import_result.receipts_outside_period == 1 else "s" }} fell outside {{ period_start }}-{{ period_end }} (or had no date) - left untouched for whichever upload's period covers them.</p>
+    <p class="muted">{{ t("aor_results.outside_period_one" if import_result.receipts_outside_period == 1 else "aor_results.outside_period_many", count=import_result.receipts_outside_period, start=period_start, end=period_end) }}</p>
   {% endif %}
 
-  <p class="muted">Download annotated copy &mdash; your file, unchanged, plus 3 sheets scoped to whichever PO purchase month you pick below (a different date range from the payment window above): Payments, Valid Payments (green = full payment, yellow = 1st/6th instalment), and Boundary Payments for anything sitting right on the edge of that month.</p>
+  <p class="muted">{{ t("aor_results.download_help") }}</p>
   <form method="get" action="{{ url_for('web.download_aor_annotated', upload_id=aor_upload_id) }}">
-    <label>PO purchase period start
+    <label>{{ t("form.po_period_start") }}
       <input type="date" name="po_period_start" required>
     </label>
-    <label>PO purchase period end
+    <label>{{ t("form.po_period_end") }}
       <input type="date" name="po_period_end" required>
     </label>
-    <button class="button" type="submit">Download annotated copy</button>
+    <button class="button" type="submit">{{ t("aor_results.download_button") }}</button>
   </form>
 
   {% if raised_events %}
-    <p class="muted">After confirming below, download the Overall Commission report for whichever PO purchase month(s) it belongs to from Past Reports.</p>
+    <p class="muted">{{ t("aor_results.after_confirming_go_to_reports") }}</p>
   {% endif %}
 
-  <h2>Import review panel</h2>
+  <h2>{{ t("results.review_panel_heading") }}</h2>
   {% if import_result.review_flags %}
-    <p class="muted">Nothing here blocks the upload - just worth a glance.</p>
+    <p class="muted">{{ t("results.review_panel_help") }}</p>
     <table>
       <tr><th>Receipt No</th><th>PO No</th><th>Message</th></tr>
       {% for flag in import_result.review_flags %}
@@ -34,12 +33,12 @@
       {% endfor %}
     </table>
   {% else %}
-    <p class="muted">Nothing flagged.</p>
+    <p class="muted">{{ t("results.review_panel_empty") }}</p>
   {% endif %}
 
-  <h2>Newly detected this run</h2>
+  <h2>{{ t("results.newly_detected_heading") }}</h2>
   {% if raised_events %}
-    <p class="muted">Needs your confirmation before it's sent to Accounts.</p>
+    <p class="muted">{{ t("results.needs_confirmation") }}</p>
     <table>
       <tr><th>PO No</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th></tr>
       {% for event in raised_events %}
@@ -51,10 +50,10 @@
         </tr>
       {% endfor %}
     </table>
-    <p><a class="button" href="{{ url_for('web.review', run_id=commission_run_id) }}">Review &amp; confirm</a></p>
+    <p><a class="button" href="{{ url_for('web.review', run_id=commission_run_id) }}">{{ t("action.review_confirm") }}</a></p>
   {% else %}
-    <p class="muted">Nothing newly due this cycle. Looking for a report? See <a href="{{ url_for('web.reports') }}">Past Reports</a>.</p>
+    <p class="muted">{{ t("aor_results.nothing_newly_due", link='<a href="' + url_for('web.reports') + '">' + t("nav.past_reports") + '</a>') | safe }}</p>
   {% endif %}
 
-  <p><a href="{{ url_for('web.upload_aor') }}">Upload another AOR file</a></p>
+  <p><a href="{{ url_for('web.upload_aor') }}">{{ t("action.upload_another_aor_file") }}</a></p>
 {% endblock %}

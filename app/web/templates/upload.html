@@ -1,14 +1,14 @@
 {% extends "base.html" %}
-{% block title %}Upload Commission Base Report{% endblock %}
+{% block title %}{{ t("upload.heading") }}{% endblock %}
 {% block content %}
-  <h1>Upload Commission Base Report</h1>
-  <p class="muted">Upload the Kenjin Master report Excel file. The system will check every PO for newly-due full-payment or instalment commission since the last upload.</p>
-  <p class="muted">Got payments to log from the AOR export instead? <a href="{{ url_for('web.upload_aor') }}">Upload AOR Report</a>.</p>
+  <h1>{{ t("upload.heading") }}</h1>
+  <p class="muted">{{ t("upload.help") }}</p>
+  <p class="muted">{{ t("upload.aor_instead_lead") }} <a href="{{ url_for('web.upload_aor') }}">{{ t("upload.aor_link_text") }}</a>.</p>
   <form method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <label>Commission Base Report (.xlsx)
+    <label>{{ t("upload.file_label") }}
       <input type="file" name="report_file" accept=".xlsx" required>
     </label>
-    <button class="button" type="submit">Process upload</button>
+    <button class="button" type="submit">{{ t("action.process_upload") }}</button>
   </form>
 {% endblock %}

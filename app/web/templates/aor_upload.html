@@ -1,21 +1,21 @@
 {% extends "base.html" %}
-{% block title %}Upload AOR Report{% endblock %}
+{% block title %}{{ t("aor_upload.heading") }}{% endblock %}
 {% block content %}
-  <h1>Upload AOR (Acknowledgment of Receipt) Report</h1>
-  <p class="muted">Upload the Kenjin AOR export. Every receipt fills in whatever paid-date columns are still blank on its matching PO, without overwriting anything already there.</p>
-  <p class="muted">Looking to upload the Master report instead? <a href="{{ url_for('web.upload') }}">Upload Commission Base Report</a>.</p>
+  <h1>{{ t("aor_upload.heading") }}</h1>
+  <p class="muted">{{ t("aor_upload.help") }}</p>
+  <p class="muted">{{ t("aor_upload.master_instead_lead") }} <a href="{{ url_for('web.upload') }}">{{ t("upload.heading") }}</a>.</p>
   <form method="post" enctype="multipart/form-data">
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
-    <p class="muted">Enter the period you're processing - only receipts dated in this range get applied; the rest is left for whichever upload's period covers them.</p>
-    <label>Period start
+    <p class="muted">{{ t("aor_upload.period_help") }}</p>
+    <label>{{ t("form.period_start") }}
       <input type="date" name="period_start" required>
     </label>
-    <label>Period end
+    <label>{{ t("form.period_end") }}
       <input type="date" name="period_end" required>
     </label>
-    <label>AOR Report (.xlsx)
+    <label>{{ t("aor_upload.file_label") }}
       <input type="file" name="report_file" accept=".xlsx" required>
     </label>
-    <button class="button" type="submit">Process upload</button>
+    <button class="button" type="submit">{{ t("action.process_upload") }}</button>
   </form>
 {% endblock %}

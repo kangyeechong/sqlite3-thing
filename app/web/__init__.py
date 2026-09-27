@@ -10,10 +10,11 @@ import os
 import sys
 import warnings
 
-from flask import Flask, redirect, render_template, request, session, url_for
+from flask import Flask, abort, redirect, render_template, request, session, url_for
 
 from ..db.connection import init_db
-from .csrf import get_csrf_token
+from .csrf import get_csrf_token, validate_csrf_token
+from .i18n import LANGUAGES, t
 from .routes import bp as web_blueprint
 
 _DEV_ONLY_SECRET_KEY = "dev-only-not-for-production"
@@ -77,13 +78,26 @@ def create_app(db_path, secret_key=None):
 
     app.register_blueprint(web_blueprint)
 
-    # Makes csrf_token() callable directly in any template without
-    # every route having to remember to pass it in explicitly.
-    app.context_processor(lambda: {"csrf_token": get_csrf_token})
+    # Makes csrf_token() and t() (translation lookup - see .i18n)
+    # callable directly in any template without every route having to
+    # remember to pass them in explicitly.
+    app.context_processor(lambda: {"csrf_token": get_csrf_token, "t": t, "languages": LANGUAGES})
 
     @app.route("/")
     def index():
         return redirect(url_for("web.upload"))
+
+    @app.route("/lang", methods=["POST"])
+    def set_language():
+        validate_csrf_token(request.form.get("csrf_token"))
+        code = request.form.get("code", "")
+        if code not in LANGUAGES:
+            abort(400, description="Unknown language.")
+        session["lang"] = code
+        referrer = request.referrer
+        if referrer and referrer.startswith(request.host_url):
+            return redirect(referrer)
+        return redirect(url_for("web.upload") if session.get("user_email") else url_for("web.login"))
 
     def _fallback_continue_url():
         return url_for("web.upload") if session.get("user_email") else url_for("web.login")
@@ -115,20 +129,20 @@ def create_app(db_path, secret_key=None):
         # or a sensible fallback.
         return render_template(
             "error.html",
-            heading="Something went wrong",
+            heading=t("error.something_wrong"),
             message=error.description or "That request couldn't be processed.",
             continue_url=_continue_url(),
-            continue_label="Try again",
+            continue_label=t("action.try_again"),
         ), 400
 
     @app.errorhandler(404)
     def handle_not_found(error):
         return render_template(
             "error.html",
-            heading="Not found",
+            heading=t("error.not_found"),
             message=error.description or "That page or item doesn't exist.",
             continue_url=_fallback_continue_url(),
-            continue_label="Back to " + ("Upload" if session.get("user_email") else "Log in"),
+            continue_label=t("action.back_to_upload") if session.get("user_email") else t("action.back_to_login"),
         ), 404
 
     return app

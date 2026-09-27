@@ -242,11 +242,19 @@
 <body>
   <nav>
     <strong>Agent Commission Tool</strong>
-    <span style="display:flex; align-items:center; gap:16px;">
+    <span style="display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
       {% if session.get('user_email') %}
-        <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.upload') }}">Master Report</a> &middot; <a href="{{ url_for('web.upload_aor') }}">AOR Report</a> &middot; <a href="{{ url_for('web.reports') }}">Past Reports</a> &middot; <a href="{{ url_for('web.agencies') }}">Agencies</a> &middot; <a href="{{ url_for('web.logout') }}">Log out</a></span>
+        <span class="muted">{{ session.get('display_name') }} &middot; <a href="{{ url_for('web.upload') }}">{{ t("nav.master_report") }}</a> &middot; <a href="{{ url_for('web.upload_aor') }}">{{ t("nav.aor_report") }}</a> &middot; <a href="{{ url_for('web.reports') }}">{{ t("nav.past_reports") }}</a> &middot; <a href="{{ url_for('web.agencies') }}">{{ t("nav.agencies") }}</a> &middot; <a href="{{ url_for('web.logout') }}">{{ t("nav.logout") }}</a></span>
       {% endif %}
-      <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch between light and dark mode">&#9680; Theme</button>
+      <form method="post" action="{{ url_for('set_language') }}" style="margin:0;">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+        <select name="code" class="theme-toggle" style="width:auto; margin:0; display:inline-block;" aria-label="{{ t('nav.language') }}" onchange="this.form.submit()">
+          {% for code, label in languages.items() %}
+            <option value="{{ code }}"{% if session.get('lang', 'en') == code %} selected{% endif %}>{{ label }}</option>
+          {% endfor %}
+        </select>
+      </form>
+      <button type="button" id="theme-toggle" class="theme-toggle" aria-label="Switch between light and dark mode">&#9680; {{ t("nav.theme_toggle") }}</button>
     </span>
   </nav>
   <script>

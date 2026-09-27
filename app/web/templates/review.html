@@ -1,11 +1,11 @@
 {% extends "base.html" %}
-{% block title %}Review Commission Run{% endblock %}
+{% block title %}{{ t("review.heading", run_id=run_id) }}{% endblock %}
 {% block content %}
-  <h1>Review commission run #{{ run_id }}</h1>
+  <h1>{{ t("review.heading", run_id=run_id) }}</h1>
 
-  <h2>Pending your confirmation</h2>
+  <h2>{{ t("review.pending_heading") }}</h2>
   {% if pending_events %}
-    <p class="muted">Detected automatically - nothing's due, and no download is available, until you confirm below.</p>
+    <p class="muted">{{ t("review.pending_help") }}</p>
     <form method="post" action="{{ url_for('web.confirm_review', run_id=run_id) }}">
       <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
       <table>
@@ -23,15 +23,15 @@
           </tr>
         {% endfor %}
       </table>
-      <button type="submit" class="button">Confirm selected</button>
+      <button type="submit" class="button">{{ t("action.confirm_selected") }}</button>
     </form>
   {% else %}
-    <p class="muted">Nothing pending - everything detected on this run has already been confirmed.</p>
+    <p class="muted">{{ t("review.pending_empty") }}</p>
   {% endif %}
 
-  <h2>Confirmed this run</h2>
+  <h2>{{ t("review.confirmed_heading") }}</h2>
   {% if confirmed_events %}
-    <p class="muted">Made a mistake? Void it below with a reason - it comes off every report immediately.</p>
+    <p class="muted">{{ t("review.confirmed_help") }}</p>
     <table>
       <tr><th>PO No</th><th>Customer</th><th>Agency</th><th>Agent</th><th>Trigger</th><th>Trigger Date</th><th>Amount (RM)</th><th>Void</th></tr>
       {% for event in confirmed_events %}
@@ -47,21 +47,21 @@
             <form method="post" action="{{ url_for('web.void_review_event', run_id=run_id) }}">
               <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
               <input type="hidden" name="event_id" value="{{ event.id }}">
-              <input type="text" name="reason" placeholder="Reason (required)" required>
-              <button type="submit" class="button button-danger">Void</button>
+              <input type="text" name="reason" placeholder="{{ t('form.reason_required_placeholder') }}" required>
+              <button type="submit" class="button button-danger">{{ t("action.void") }}</button>
             </form>
           </td>
         </tr>
       {% endfor %}
     </table>
-    <p><a class="button" href="{{ url_for('web.download', run_id=run_id) }}">Download Excel report</a></p>
+    <p><a class="button" href="{{ url_for('web.download', run_id=run_id) }}">{{ t("action.download_excel_report") }}</a></p>
   {% else %}
-    <p class="muted">Nothing confirmed yet - no report to download until something is.</p>
+    <p class="muted">{{ t("review.confirmed_empty") }}</p>
   {% endif %}
 
   {% if voided_events %}
-    <h2>Voided</h2>
-    <p class="muted">Confirmed commissions that were corrected - kept here for the record, excluded from every report.</p>
+    <h2>{{ t("review.voided_heading") }}</h2>
+    <p class="muted">{{ t("review.voided_help") }}</p>
     <table>
       <tr><th>PO No</th><th>Trigger</th><th>Amount (RM)</th><th>Voided By</th><th>Voided At</th><th>Reason</th></tr>
       {% for event in voided_events %}
@@ -77,5 +77,5 @@
     </table>
   {% endif %}
 
-  <p><a href="{{ url_for('web.upload') }}">Upload another file</a></p>
+  <p><a href="{{ url_for('web.upload') }}">{{ t("action.upload_another_file") }}</a></p>
 {% endblock %}

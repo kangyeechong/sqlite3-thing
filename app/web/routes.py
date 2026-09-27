@@ -30,6 +30,7 @@ from ..pipeline import (
 from ..report import TRIGGER_LABELS, generate_commission_run_report, generate_period_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
 from .csrf import validate_csrf_token
+from .i18n import t
 
 bp = Blueprint("web", __name__)
 
@@ -72,7 +73,7 @@ def login():
     password_ok = verify_password(password, stored_hash)  # always runs, even for a missing user - see the comment above
 
     if user is None or not password_ok:
-        flash("Incorrect email or password.", "error")
+        flash(t("flash.incorrect_credentials"), "error")
         return render_template("login.html"), 401
 
     session["user_email"] = user["email"]
@@ -96,7 +97,7 @@ def upload():
 
     uploaded_file = request.files.get("report_file")
     if uploaded_file is None or uploaded_file.filename == "":
-        flash("Choose a Commission Base Report file first.", "error")
+        flash(t("flash.choose_master_file"), "error")
         return render_template("upload.html"), 400
 
     # secure_filename strips path separators and traversal sequences
@@ -127,7 +128,7 @@ def upload():
             # format openpyxl itself rejects with its own exception
             # types) - every failure here should become a message the
             # person uploading can act on, never a raw server error.
-            flash(f"Couldn't process this file: {exc}", "error")
+            flash(t("flash.couldnt_process_file", error=exc), "error")
             return render_template("upload.html"), 400
 
     return render_template(
@@ -158,15 +159,15 @@ def upload_aor():
     period_start = (request.form.get("period_start") or "").strip()
     period_end = (request.form.get("period_end") or "").strip()
     if not period_start or not period_end:
-        flash("Enter the date range you're processing before uploading.", "error")
+        flash(t("flash.enter_aor_date_range"), "error")
         return render_template("aor_upload.html"), 400
     if period_start > period_end:
-        flash("The start date is after the end date - check the range and try again.", "error")
+        flash(t("flash.date_range_invalid"), "error")
         return render_template("aor_upload.html"), 400
 
     uploaded_file = request.files.get("report_file")
     if uploaded_file is None or uploaded_file.filename == "":
-        flash("Choose an AOR (Acknowledgment of Receipt) file first.", "error")
+        flash(t("flash.choose_aor_file"), "error")
         return render_template("aor_upload.html"), 400
 
     safe_name = secure_filename(uploaded_file.filename) or "upload.xlsx"
@@ -188,7 +189,7 @@ def upload_aor():
             # Same broad-on-purpose reasoning as upload() above - this
             # is the boundary where an unpredictable, user-supplied
             # file gets parsed.
-            flash(f"Couldn't process this file: {exc}", "error")
+            flash(t("flash.couldnt_process_file", error=exc), "error")
             return render_template("aor_upload.html"), 400
 
     return render_template(
@@ -330,9 +331,15 @@ def confirm_review(run_id):
         current_app.config["DB_PATH"], run_id, event_ids, session["user_email"]
     )
     if confirmed_count:
-        flash(f"Confirmed {confirmed_count} commission(s).", "success")
+        flash(
+            t(
+                "flash.confirmed_commissions_one" if confirmed_count == 1 else "flash.confirmed_commissions_many",
+                count=confirmed_count,
+            ),
+            "success",
+        )
     else:
-        flash("Nothing was confirmed - select at least one row first.", "warning")
+        flash(t("flash.nothing_confirmed_select_row"), "warning")
 
     return redirect(url_for("web.review", run_id=run_id))
 
@@ -345,25 +352,21 @@ def void_review_event(run_id):
     try:
         event_id = int(request.form.get("event_id", ""))
     except ValueError:
-        flash("Couldn't void that - invalid event.", "error")
+        flash(t("flash.void_invalid_event"), "error")
         return redirect(url_for("web.review", run_id=run_id))
 
     reason = (request.form.get("reason") or "").strip()
     if not reason:
-        flash("A reason is required to void a confirmed commission.", "error")
+        flash(t("flash.void_reason_required"), "error")
         return redirect(url_for("web.review", run_id=run_id))
 
     voided = void_event(
         current_app.config["DB_PATH"], run_id, event_id, session["user_email"], reason,
     )
     if voided:
-        flash(
-            "Commission voided - it won't show on any report until the underlying "
-            "data is corrected and it's detected and confirmed again.",
-            "success",
-        )
+        flash(t("flash.commission_voided"), "success")
     else:
-        flash("Couldn't void that - it may already be voided, or doesn't belong to this run.", "error")
+        flash(t("flash.void_failed_event"), "error")
 
     return redirect(url_for("web.review", run_id=run_id))
 
@@ -386,30 +389,26 @@ def void_aor_trigger_route():
     try:
         po_no = int(request.form.get("po_no", ""))
     except ValueError:
-        flash("Couldn't void that - PO No must be a number.", "error")
+        flash(t("flash.void_po_not_number"), "error")
         return redirect(url_for("web.reports"))
 
     trigger_type = request.form.get("trigger_type", "")
     if trigger_type not in TRIGGER_LABELS:
-        flash("Couldn't void that - invalid trigger.", "error")
+        flash(t("flash.void_invalid_trigger"), "error")
         return redirect(url_for("web.reports"))
 
     reason = (request.form.get("reason") or "").strip()
     if not reason:
-        flash("A reason is required to void an AOR trigger.", "error")
+        flash(t("flash.void_aor_reason_required"), "error")
         return redirect(url_for("web.reports"))
 
     voided = void_aor_trigger(
         current_app.config["DB_PATH"], po_no, trigger_type, session["user_email"], reason,
     )
     if voided:
-        flash(
-            f"PO {po_no}'s {TRIGGER_LABELS[trigger_type]} voided - re-upload a corrected AOR file "
-            f"to reapply it once the data's actually right.",
-            "success",
-        )
+        flash(t("flash.aor_trigger_voided", po_no=po_no, trigger_label=TRIGGER_LABELS[trigger_type]), "success")
     else:
-        flash(f"Couldn't void that - no AOR receipt found for PO {po_no}'s {TRIGGER_LABELS[trigger_type]}.", "error")
+        flash(t("flash.aor_trigger_void_failed", po_no=po_no, trigger_label=TRIGGER_LABELS[trigger_type]), "error")
 
     return redirect(url_for("web.reports"))
 
@@ -450,18 +449,18 @@ def create_agency_route():
     format_key = request.form.get("format_key", "")
 
     if not agency_code:
-        flash("Agency Code is required.", "error")
+        flash(t("flash.agency_code_required"), "error")
     elif not name:
-        flash("Name is required.", "error")
+        flash(t("flash.agency_name_required"), "error")
     elif format_key not in AGENCY_FORMATS:
-        flash("Choose a valid format.", "error")
+        flash(t("flash.agency_format_invalid"), "error")
     else:
         try:
             create_agency(current_app.config["DB_PATH"], agency_code, name, format_key)
         except ValueError as exc:
             flash(str(exc), "error")
         else:
-            flash(f"Agency {agency_code!r} added.", "success")
+            flash(t("flash.agency_added", code=agency_code), "success")
 
     return redirect(url_for("web.agencies"))
 
@@ -487,13 +486,13 @@ def edit_agency(agency_code):
     format_key = request.form.get("format_key", "")
 
     if not new_agency_code:
-        flash("Agency Code is required.", "error")
+        flash(t("flash.agency_code_required"), "error")
         return redirect(url_for("web.edit_agency", agency_code=agency_code))
     if not name:
-        flash("Name is required.", "error")
+        flash(t("flash.agency_name_required"), "error")
         return redirect(url_for("web.edit_agency", agency_code=agency_code))
     if format_key not in AGENCY_FORMATS:
-        flash("Choose a valid format.", "error")
+        flash(t("flash.agency_format_invalid"), "error")
         return redirect(url_for("web.edit_agency", agency_code=agency_code))
 
     try:
@@ -502,7 +501,7 @@ def edit_agency(agency_code):
         flash(str(exc), "error")
         return redirect(url_for("web.edit_agency", agency_code=agency_code))
 
-    flash(f"Agency {new_agency_code!r} updated - only affects commissions detected from now on.", "success")
+    flash(t("flash.agency_updated", new_code=new_agency_code), "success")
     return redirect(url_for("web.agencies"))
 
 
@@ -529,7 +528,7 @@ def download(run_id):
         except ValueError:
             # Nothing confirmed yet on this run - send them to the
             # review page to fix that, rather than a raw stack trace.
-            flash("Nothing on this run is confirmed yet - review and confirm it first.", "warning")
+            flash(t("flash.review_confirm_first"), "warning")
             return redirect(url_for("web.review", run_id=run_id))
     finally:
         conn.close()
@@ -566,7 +565,7 @@ def download_period():
         try:
             generate_period_report(conn, period_start, period_end, buffer)
         except ValueError:
-            flash(f"Nothing was confirmed between {period_start} and {period_end} - nothing to export.", "warning")
+            flash(t("flash.nothing_confirmed_in_period", start=period_start, end=period_end), "warning")
             return redirect(url_for("web.reports"))
     finally:
         conn.close()
