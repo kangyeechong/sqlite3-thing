@@ -239,6 +239,12 @@ def _read_referral_flagged_po_nos(workbook):
         for row in sheet.iter_rows(min_row=header_row_num + 1):
             no_value = row[no_col - 1].value
             if not _is_positive_whole_number(no_value):
+                # A genuinely blank row (see _read_rows for the full
+                # reasoning) is skipped rather than treated as the end
+                # of this sheet's data; anything else not a valid "No"
+                # (the real trailing summary) really does end it.
+                if all(cell.value is None for cell in row):
+                    continue
                 break
             po_no = row[po_col - 1].value
             if not _is_positive_whole_number(po_no):
@@ -408,10 +414,20 @@ def _is_positive_whole_number(value):
 def _read_rows(sheet):
     """
     Yields one dict per data row, keyed by the sheet's own header text.
-    Stops as soon as a row's "No" column isn't a positive integer -
-    that's how the real sheet's trailing summary table (Date Record /
-    Full Commission / ... - see docs/data_model.md section 2) gets
-    excluded without needing to know its exact row position.
+    Stops as soon as a row's "No" column isn't a positive integer AND
+    the row has some other content in it - that's how the real sheet's
+    trailing summary table (Date Record / Full Commission / ... - see
+    docs/data_model.md section 2) gets excluded without needing to know
+    its exact row position; a real trailing summary always has actual
+    text in it somewhere, never a completely blank row.
+
+    A row that's entirely blank (every cell None) is skipped instead of
+    treated as the end of the data - confirmed as a real trap: a staff
+    member manually correcting a mistake by clearing a row's contents
+    (rather than actually deleting the row, which shifts everything
+    below it up) leaves exactly this kind of gap, and without this
+    distinction every PO past that gap would silently vanish from the
+    import, not just the blanked-out row itself.
     """
     header_row_num = _find_header_row(sheet)
     headers = [cell.value for cell in sheet[header_row_num]]
@@ -419,9 +435,12 @@ def _read_rows(sheet):
     for row in sheet.iter_rows(min_row=header_row_num + 1):
         values = [cell.value for cell in row]
         row_no = values[headers.index("No")]
-        if not _is_positive_whole_number(row_no):
-            break
-        yield dict(zip(headers, values))
+        if _is_positive_whole_number(row_no):
+            yield dict(zip(headers, values))
+            continue
+        if all(v is None for v in values):
+            continue  # a blanked-out row, not the real end of the data - see docstring above
+        break  # a genuine trailing summary row
 
 
 def _build_contract_fields(raw_row):

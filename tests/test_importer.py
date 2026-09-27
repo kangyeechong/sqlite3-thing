@@ -90,6 +90,41 @@ def test_a_genuine_master_report_still_imports_fine(tmp_path):
     assert result.contracts_new == 1
 
 
+def test_import_skips_a_blank_row_instead_of_stopping_there(tmp_path):
+    """
+    Regression test: a staff member manually correcting a mistake by
+    clearing a row's contents (rather than actually deleting the row,
+    which shifts everything below it up) leaves a blank gap in the
+    middle of otherwise-real data. _read_rows must not mistake that gap
+    for the sheet's trailing summary table (which always has real text
+    in it, e.g. "Total") - every PO after the gap must still import,
+    not silently vanish.
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 90001, "Customer ID": "CUSTBLANK1", "Customer Name": "Customer Blank 1"},
+        {"No": 2, "PO No": 90002, "Customer ID": "CUSTBLANK2", "Customer Name": "Customer Blank 2"},
+    ])
+
+    # Simulate clearing the first data row's contents instead of
+    # properly deleting it - insert_rows leaves a genuinely blank row
+    # (every cell None), same effect, right before both real POs.
+    workbook = openpyxl.load_workbook(xlsx_path)
+    sheet = workbook.active
+    sheet.insert_rows(7)
+    workbook.save(xlsx_path)
+
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx_path))
+    conn.commit()
+
+    po_nos = {row["po_no"] for row in conn.execute("SELECT po_no FROM contracts")}
+    conn.close()
+    assert po_nos == {90001, 90002}
+
+
 def test_a_gap_in_po_no_sequence_gets_filled_as_a_cancelled_po(tmp_path):
     """
     A missing PO No between two real POs in the same upload always
@@ -574,6 +609,44 @@ def test_a_po_flagged_by_the_referral_breakdown_sheet_gets_fb_lead_referred_set(
     assert row60["fb_lead_referred"] == 1
     assert row61["fb_lead_referred"] == 0
     conn.close()
+
+
+def test_referral_breakdown_sheet_skips_a_blank_row_instead_of_stopping_there(tmp_path):
+    """
+    Same trap as the Master report's own _read_rows - a blanked-out row
+    (cleared, not properly deleted) partway through this sheet must not
+    be mistaken for its trailing summary, or every PO after the gap
+    would silently lose its fb_lead_referred flag.
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [
+        {"No": 1, "PO No": 70063, "Customer ID": "CUSTR7", "Customer Name": "Customer R7",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+        {"No": 2, "PO No": 70064, "Customer ID": "CUSTR8", "Customer Name": "Customer R8",
+         "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001"},
+    ])
+    _add_referral_breakdown_sheet(xlsx_path, [
+        (1, 70063, 300.0, None, None),
+        (2, 70064, 300.0, None, None),
+    ])
+
+    # Blank out the referral-breakdown sheet's first data row instead
+    # of deleting it - insert_rows leaves a genuinely blank row right
+    # before PO 70064's row.
+    workbook = openpyxl.load_workbook(xlsx_path)
+    sheet = workbook["AW Consultancy"]
+    sheet.insert_rows(2)
+    workbook.save(xlsx_path)
+
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx_path))
+    conn.commit()
+
+    row64 = conn.execute("SELECT fb_lead_referred FROM contracts WHERE po_no = 70064").fetchone()
+    conn.close()
+    assert row64["fb_lead_referred"] == 1
 
 
 def test_fb_lead_referred_flag_is_sticky_across_a_later_routine_upload(tmp_path):

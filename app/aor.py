@@ -125,10 +125,22 @@ def _find_header_row(sheet):
 
 def _read_aor_rows(sheet):
     """Yields each data row as a dict keyed by header, stopping at the
-    first row whose "No" isn't a positive whole number - the same
-    "Total"/"Contra"/repeated-header-row footer shape confirmed on the
-    real Master report also shows up verbatim at the bottom of a real
-    AOR export."""
+    first row whose "No" isn't a positive whole number AND has some
+    other content in it - the same "Total"/"Contra"/repeated-header-row
+    footer shape confirmed on the real Master report also shows up
+    verbatim at the bottom of a real AOR export, and always has real
+    text somewhere in the row (e.g. the word "Total" itself), never a
+    row that's entirely blank.
+
+    A row that's entirely blank (every cell None) is skipped instead of
+    treated as the end of the data - confirmed as a real trap: a staff
+    member manually correcting a mistake in the file by clearing a
+    row's contents (rather than actually deleting the row, which shifts
+    everything below it up) leaves exactly this kind of gap, and
+    without this distinction every row past that gap silently vanished
+    from both import_aor_report and annotate_aor_file, not just the
+    blanked-out row itself.
+    """
     header_row_num = _find_header_row(sheet)
     if header_row_num is None:
         return
@@ -136,9 +148,12 @@ def _read_aor_rows(sheet):
     for row in sheet.iter_rows(min_row=header_row_num + 1):
         values = [cell.value for cell in row]
         row_no = values[headers.index("No")]
-        if not _is_positive_whole_number(row_no):
-            break
-        yield dict(zip(headers, values))
+        if _is_positive_whole_number(row_no):
+            yield dict(zip(headers, values))
+            continue
+        if all(v is None for v in values):
+            continue  # a blanked-out row, not the real end of the data - see docstring above
+        break  # a genuine footer/Total row
 
 
 def _classify_reference(reference_text):

@@ -536,6 +536,51 @@ def test_a_split_receipt_pair_for_the_same_installment_uses_the_later_date(tmp_p
     assert paid_date == "2026-08-15"  # the later of the two receipts
 
 
+def test_aor_import_skips_a_blank_row_instead_of_stopping_there(tmp_path):
+    """
+    Regression test: same trap as the Master report importer - a
+    blanked-out row (cleared, not properly deleted, leaving a gap
+    rather than shifting rows up) partway through the file must not be
+    mistaken for the export's trailing footer, or every receipt after
+    the gap would silently vanish from both the import and the
+    annotated download.
+    """
+    db_path = _db_path(tmp_path)
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [
+        {
+            "No": 1, "Acknowledgment Receipt No": "RC-BLANK-0001",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "PO No": 90310, "Customer ID": "CUSTBLANK1", "Customer Name": "Customer Blank 1",
+            "Reference No": "HLB 000000 STAMP DUTY",
+        },
+        {
+            "No": 2, "Acknowledgment Receipt No": "RC-BLANK-0002",
+            "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+            "PO No": 90311, "Customer ID": "CUSTBLANK2", "Customer Name": "Customer Blank 2",
+            "Reference No": "HLB 000000 STAMP DUTY",
+        },
+    ])
+
+    # Header is on row 22 (see build_aor_report), so row 23 is the
+    # first real data row - insert_rows there leaves a genuinely blank
+    # row right before both receipts, same effect as clearing it.
+    workbook = openpyxl.load_workbook(xlsx_aor)
+    sheet = workbook.active
+    sheet.insert_rows(23)
+    workbook.save(xlsx_aor)
+
+    result = process_aor_upload(db_path, str(xlsx_aor), run_date=datetime.date(2026, 8, 17))
+    assert result["import_result"].receipts_imported == 2
+
+    conn = get_connection(db_path)
+    ack_nos = {
+        row["acknowledgment_receipt_no"] for row in conn.execute("SELECT acknowledgment_receipt_no FROM aor_receipts")
+    }
+    conn.close()
+    assert ack_nos == {"RC-BLANK-0001", "RC-BLANK-0002"}
+
+
 def test_unrecognized_reference_is_flagged_not_silently_applied(tmp_path):
     db_path = _db_path(tmp_path)
     xlsx_master = tmp_path / "master.xlsx"
@@ -1273,5 +1318,37 @@ def test_annotate_aor_file_sorts_by_po_no_ascending(tmp_path):
     po_col = AOR_HEADERS.index("PO No") + 1
     po_nos = [filtered_sheet.cell(row=r, column=po_col).value for r in range(2, filtered_sheet.max_row + 1)]
     assert po_nos == [20260299, 20260299, 20260300]
+
+
+def test_annotate_aor_file_includes_rows_after_a_blank_row(tmp_path):
+    """
+    The exact real bug this was found from: a staff member manually
+    clearing a receipt's row (instead of properly deleting it, which
+    would shift everything below it up) left a blank gap - which
+    silently truncated the annotated download for every row after that
+    gap, not just the one that was actually cleared.
+    """
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-BLANK-0004", "PO No": 90313,
+        "Customer ID": "CUSTBLANK4", "Customer Name": "Customer Blank 4",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 10),
+        "Purchase Statement Date": datetime.date(2026, 3, 5),
+        "Reference No": "TRF 10/08/2026 (INST 06/24)",
+    }])
+
+    # Header is on row 22 (see build_aor_report), so row 23 is the
+    # first real data row - insert_rows there leaves a genuinely blank
+    # row right before the real receipt.
+    workbook = openpyxl.load_workbook(xlsx_aor)
+    sheet = workbook.active
+    sheet.insert_rows(23)
+    workbook.save(xlsx_aor)
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path), "2026-03-01", "2026-03-31")
+
+    rows = _valid_rows(openpyxl.load_workbook(output_path))
+    assert [r[0] for r in rows] == ["TRF 10/08/2026 (INST 06/24)"]
 
 
