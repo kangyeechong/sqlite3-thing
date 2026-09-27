@@ -11,7 +11,7 @@ import os
 from .agencies import create_agency as _create_agency, list_agencies as _list_agencies, update_agency as _update_agency
 from .aor import import_aor_report, po_months_summary as _po_months_summary, void_aor_trigger as _void_aor_trigger
 from .db.connection import get_connection, init_db
-from .importer import import_master_report
+from .importer import import_master_report, override_fb_lead_referred as _override_fb_lead_referred
 from .commission import (
     confirm_commission_events, load_events_for_run, process_commission_run, void_commission_event,
 )
@@ -343,4 +343,17 @@ def update_agency(db_path, current_agency_code, new_agency_code, name, format_ke
     collides with a different agency, or format_key isn't recognized."""
     with _connect(db_path) as conn:
         _update_agency(conn, current_agency_code, new_agency_code, name, format_key)
+        conn.commit()
+
+
+def override_fb_lead_referred(db_path, po_no, referred, overridden_by_user, reason):
+    """
+    Manually corrects one PO's fb_lead_referred flag - see
+    app.importer.override_fb_lead_referred for what this actually does
+    and why it's needed (Remarks-based auto-detection was wrong or
+    never happened). Raises ValueError (caught by the web layer) if
+    po_no doesn't exist.
+    """
+    with _connect(db_path) as conn:
+        _override_fb_lead_referred(conn, po_no, referred, overridden_by_user, reason)
         conn.commit()

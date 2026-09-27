@@ -692,7 +692,21 @@ def _upsert_contract(conn, fields, now_iso):
             -- an earlier transition upload had already correctly marked.
             -- Once a PO is known to be referral-sourced, it stays that
             -- way regardless of what any later upload does or doesn't say.
-            fb_lead_referred = MAX(excluded.fb_lead_referred, contracts.fb_lead_referred),
+            --
+            -- EXCEPT once a human has manually corrected this PO's flag
+            -- (see override_fb_lead_referred below, fb_lead_referred_
+            -- overridden_by_user non-NULL) - then this upload's own
+            -- Remarks-based detection is ignored entirely and the
+            -- manually-set value is kept, forever, even if Kenjin's
+            -- Remarks still carries the referral phrase. Without this,
+            -- a staff correction (e.g. undoing a false positive) would
+            -- get silently re-flipped back by the very next routine
+            -- upload, since that upload has no way to know the flag it
+            -- just re-derived was already deliberately overridden.
+            fb_lead_referred = CASE
+                WHEN contracts.fb_lead_referred_overridden_by_user IS NOT NULL THEN contracts.fb_lead_referred
+                ELSE MAX(excluded.fb_lead_referred, contracts.fb_lead_referred)
+            END,
             updated_at = excluded.updated_at
         """,
         {**fields, "now": now_iso},
@@ -799,6 +813,58 @@ def _detect_cancelled_po_gaps(conn, po_nos_this_upload, now_iso):
             f"in this upload) - added as a cancelled PO so it's tracked, not silently skipped.",
         ))
     return flags
+
+
+def override_fb_lead_referred(conn, po_no, referred, overridden_by_user, reason):
+    """
+    Manually corrects one PO's fb_lead_referred flag - for when the
+    Remarks-based auto-detection (see parsing.detect_fb_lead_referred)
+    was wrong or never happened at all: an agent verbally confirmed a
+    referral but staff forgot to type the phrase into Kenjin, or the
+    phrase got typed by mistake for a sale that was never actually
+    FB-referred.
+
+    Unlike a plain re-upload, this PINS the flag: see the ON CONFLICT
+    clause in _upsert_contract above - once
+    fb_lead_referred_overridden_by_user is set here, no future routine
+    upload's Remarks-based detection can silently flip it back,
+    regardless of what Kenjin's own Remarks says. Never deleted or
+    cleared automatically, so the correction (and who made it, and
+    why) stays visible forever - same "nothing hidden" philosophy as
+    every voided_at/voided_by_user/reason column elsewhere in this
+    schema. Calling this again later (e.g. to undo a previous
+    correction) simply overwrites these three columns with the new
+    correction - there's no history of every past override, only the
+    current one, same as every other single-reason audit column here.
+
+    Only ever affects a commission raised AFTER this call - an
+    already-raised commission_events row was computed once, at raise
+    time, from whatever fb_lead_referred was back then, and is never
+    recalculated (see commission._build_event). Correcting the flag
+    here does not retroactively fix an already-confirmed commission's
+    amount; that needs voiding and re-detecting, same as any other
+    "the underlying data was wrong" correction.
+
+    Raises ValueError if po_no doesn't exist. Returns nothing - the
+    caller already knows po_no is valid once this doesn't raise.
+    """
+    existing = conn.execute("SELECT 1 FROM contracts WHERE po_no = ?", (po_no,)).fetchone()
+    if existing is None:
+        raise ValueError(f"No contract with PO No {po_no}.")
+
+    now_iso = datetime.datetime.now().isoformat(timespec="seconds")
+    conn.execute(
+        """
+        UPDATE contracts SET
+            fb_lead_referred = ?,
+            fb_lead_referred_overridden_at = ?,
+            fb_lead_referred_overridden_by_user = ?,
+            fb_lead_referred_override_reason = ?,
+            updated_at = ?
+        WHERE po_no = ?
+        """,
+        (1 if referred else 0, now_iso, overridden_by_user, reason, now_iso, po_no),
+    )
 
 
 def import_master_report(conn, file_path, imported_by_user=None):

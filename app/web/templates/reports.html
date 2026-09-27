@@ -113,5 +113,24 @@
     <button class="button button-danger" type="submit">{{ t("action.void") }}</button>
   </form>
 
+  <h2>{{ t("reports.fb_override_heading") }}</h2>
+  <p class="muted">{{ t("reports.fb_override_help") }}</p>
+  <form method="post" action="{{ url_for('web.override_fb_lead_referred_route') }}">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
+    <label>{{ t("form.po_no") }}
+      <input type="number" name="po_no" required>
+    </label>
+    <label>{{ t("form.fb_referred") }}
+      <select name="referred" required>
+        <option value="yes">{{ t("form.fb_referred_yes") }}</option>
+        <option value="no">{{ t("form.fb_referred_no") }}</option>
+      </select>
+    </label>
+    <label>{{ t("form.reason") }}
+      <input type="text" name="reason" required>
+    </label>
+    <button class="button" type="submit">{{ t("action.save") }}</button>
+  </form>
+
   <p><a href="{{ url_for('web.upload') }}">{{ t("action.upload_another_file") }}</a></p>
 {% endblock %}

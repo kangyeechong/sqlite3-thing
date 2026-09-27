@@ -108,6 +108,12 @@ _MIGRATIONS = [
      "ALTER TABLE aor_receipts ADD COLUMN void_reason TEXT", None),
     ("aor_uploads", "po_months",
      "ALTER TABLE aor_uploads ADD COLUMN po_months TEXT", None),
+    ("contracts", "fb_lead_referred_overridden_at",
+     "ALTER TABLE contracts ADD COLUMN fb_lead_referred_overridden_at TEXT", None),
+    ("contracts", "fb_lead_referred_overridden_by_user",
+     "ALTER TABLE contracts ADD COLUMN fb_lead_referred_overridden_by_user TEXT", None),
+    ("contracts", "fb_lead_referred_override_reason",
+     "ALTER TABLE contracts ADD COLUMN fb_lead_referred_override_reason TEXT", None),
 ]
 
 # For a brand-new table (not a new column on an existing one) - same

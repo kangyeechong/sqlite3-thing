@@ -125,6 +125,21 @@ CREATE TABLE IF NOT EXISTS contracts (
     -- 'agency_agent_split'; ignored otherwise.
     fb_lead_referred INTEGER NOT NULL DEFAULT 0 CHECK (fb_lead_referred IN (0, 1)),
 
+    -- Set together by app.importer.override_fb_lead_referred when a
+    -- staff member corrects fb_lead_referred by hand (the auto-
+    -- detected value was wrong, or missed entirely - e.g. an agent
+    -- verbally confirmed a referral but staff forgot to type the
+    -- phrase into Remarks). Non-NULL here means this PO's flag is
+    -- manually pinned: the ON CONFLICT clause in
+    -- app.importer._upsert_contract stops re-deriving fb_lead_referred
+    -- from Remarks for this PO from now on, so a later routine upload
+    -- can never silently overwrite a human correction - the same
+    -- "nothing hidden, nothing silently undone" philosophy as every
+    -- other voided_at/voided_by_user/reason column in this schema.
+    fb_lead_referred_overridden_at        TEXT,
+    fb_lead_referred_overridden_by_user   TEXT,
+    fb_lead_referred_override_reason      TEXT,
+
     remarks    TEXT,
     updated_at TEXT
 );

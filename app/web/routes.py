@@ -24,8 +24,8 @@ from ..aor import annotate_aor_file
 from ..db.connection import get_connection
 from ..pipeline import (
     confirm_events, create_agency, list_agencies, list_aor_uploads, list_confirmed_runs,
-    list_runs_with_pending_events, load_review, process_aor_upload, process_upload, update_agency,
-    void_aor_trigger, void_event,
+    list_runs_with_pending_events, load_review, override_fb_lead_referred, process_aor_upload,
+    process_upload, update_agency, void_aor_trigger, void_event,
 )
 from ..report import TRIGGER_LABELS, generate_commission_run_report, generate_period_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
@@ -410,6 +410,54 @@ def void_aor_trigger_route():
     else:
         flash(t("flash.aor_trigger_void_failed", po_no=po_no, trigger_label=TRIGGER_LABELS[trigger_type]), "error")
 
+    return redirect(url_for("web.reports"))
+
+
+@bp.route("/override-fb-lead-referred", methods=["POST"])
+@login_required
+def override_fb_lead_referred_route():
+    """
+    Manually corrects one PO's FB-lead-referred flag - see
+    app.importer.override_fb_lead_referred for the full reasoning.
+    For when the Remarks-based auto-detection was wrong (staff forgot
+    to type the referral phrase into Kenjin, or it was typed by
+    mistake for a sale that wasn't actually FB-referred). Unlike a
+    plain re-upload, this pins the flag going forward - the exact gap
+    this route closes.
+    """
+    validate_csrf_token(request.form.get("csrf_token"))
+
+    try:
+        po_no = int(request.form.get("po_no", ""))
+    except ValueError:
+        flash(t("flash.fb_po_not_number"), "error")
+        return redirect(url_for("web.reports"))
+
+    referred = request.form.get("referred", "")
+    if referred not in ("yes", "no"):
+        flash(t("flash.fb_invalid_choice"), "error")
+        return redirect(url_for("web.reports"))
+
+    reason = (request.form.get("reason") or "").strip()
+    if not reason:
+        flash(t("flash.fb_reason_required"), "error")
+        return redirect(url_for("web.reports"))
+
+    try:
+        override_fb_lead_referred(
+            current_app.config["DB_PATH"], po_no, referred == "yes", session["user_email"], reason,
+        )
+    except ValueError:
+        flash(t("flash.fb_po_not_found", po_no=po_no), "error")
+        return redirect(url_for("web.reports"))
+
+    flash(
+        t(
+            "flash.fb_override_saved_yes" if referred == "yes" else "flash.fb_override_saved_no",
+            po_no=po_no,
+        ),
+        "success",
+    )
     return redirect(url_for("web.reports"))
 
 

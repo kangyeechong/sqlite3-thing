@@ -67,6 +67,9 @@ TRANSLATIONS = {
         "form.reason_required_placeholder": "Reason (required)",
         "form.trigger": "Trigger",
         "form.po_no": "PO No",
+        "form.fb_referred": "FB-Lead Referred?",
+        "form.fb_referred_yes": "Yes",
+        "form.fb_referred_no": "No",
 
         "upload.heading": "Upload Commission Base Report",
         "upload.help": "Upload the Kenjin Master report Excel file. The system will check every PO for newly-due full-payment or instalment commission since the last upload.",
@@ -123,6 +126,8 @@ TRANSLATIONS = {
         "reports.voided_badge_title": "Re-upload a corrected AOR file to fix this.",
         "reports.void_trigger_heading": "Void an AOR trigger",
         "reports.void_trigger_help": "For when the AOR data itself was wrong (wrong PO, misread reference) - clears the receipt and paid-date so a corrected re-upload can reapply. If the data was right and only the commission math was wrong, void it from \"Review\" instead.",
+        "reports.fb_override_heading": "Correct an FB-lead referral flag",
+        "reports.fb_override_help": "For when a PO's FB-lead-referred flag is wrong - staff forgot to type the referral phrase into Kenjin, or it was typed by mistake. This locks in your correction: a later upload's Remarks can never silently overwrite it again. Only changes commissions detected from now on - an already-confirmed one keeps its original amount.",
 
         "review.heading": "Review commission run #{run_id}",
         "review.pending_heading": "Pending your confirmation",
@@ -171,6 +176,12 @@ TRANSLATIONS = {
         "flash.agency_updated": "Agency {new_code!r} updated - only affects commissions detected from now on.",
         "flash.review_confirm_first": "Nothing on this run is confirmed yet - review and confirm it first.",
         "flash.nothing_confirmed_in_period": "Nothing was confirmed between {start} and {end} - nothing to export.",
+        "flash.fb_po_not_number": "Couldn't save that - PO No must be a number.",
+        "flash.fb_invalid_choice": "Couldn't save that - choose Yes or No.",
+        "flash.fb_reason_required": "A reason is required to correct the FB-lead referral flag.",
+        "flash.fb_po_not_found": "Couldn't save that - no contract with PO No {po_no}.",
+        "flash.fb_override_saved_yes": "PO {po_no} marked as FB-lead referred - this overrides Remarks-based detection from now on; only affects commissions detected from now on.",
+        "flash.fb_override_saved_no": "PO {po_no} marked as NOT FB-lead referred - this overrides Remarks-based detection from now on; only affects commissions detected from now on.",
     },
     "zh": {
         "nav.master_report": "主报表",
@@ -213,6 +224,9 @@ TRANSLATIONS = {
         "form.reason_required_placeholder": "原因（必填）",
         "form.trigger": "触发项目",
         "form.po_no": "PO 编号",
+        "form.fb_referred": "FB 引荐？",
+        "form.fb_referred_yes": "是",
+        "form.fb_referred_no": "否",
 
         "upload.heading": "上传佣金基础报表",
         "upload.help": "上传 Kenjin 主报表 Excel 文件。系统将检查每个 PO 自上次上传以来是否有新的全额付款或分期付款佣金到期。",
@@ -269,6 +283,8 @@ TRANSLATIONS = {
         "reports.voided_badge_title": "请重新上传已更正的 AOR 文件以解决此问题。",
         "reports.void_trigger_heading": "作废 AOR 触发项目",
         "reports.void_trigger_help": "适用于 AOR 数据本身有误的情况（PO 错误、参考文字读取错误）- 会清除该收款与付款日期，以便重新上传更正后的文件套用。若数据本身正确、只是佣金计算有误，请改用「审核」页面作废。",
+        "reports.fb_override_heading": "更正 FB 引荐标记",
+        "reports.fb_override_help": "适用于某 PO 的 FB 引荐标记有误的情况 - 员工忘记在 Kenjin 中输入引荐用语，或误输入了该用语。此更正会被锁定：此后任何上传的 Remarks 都无法再次悄悄覆盖它。只会影响此后新检测到的佣金 - 已确认的佣金金额保持不变。",
 
         "review.heading": "审核处理编号 #{run_id}",
         "review.pending_heading": "待您确认",
@@ -317,6 +333,12 @@ TRANSLATIONS = {
         "flash.agency_updated": "代理机构 {new_code!r} 已更新 - 只会影响此后新检测到的佣金。",
         "flash.review_confirm_first": "此次处理尚未有任何确认项目 - 请先审核并确认。",
         "flash.nothing_confirmed_in_period": "{start} 至 {end} 之间没有任何已确认项目 - 无内容可导出。",
+        "flash.fb_po_not_number": "无法保存 - PO 编号必须是数字。",
+        "flash.fb_invalid_choice": "无法保存 - 请选择「是」或「否」。",
+        "flash.fb_reason_required": "更正 FB 引荐标记必须填写原因。",
+        "flash.fb_po_not_found": "无法保存 - 找不到 PO 编号 {po_no} 对应的合约。",
+        "flash.fb_override_saved_yes": "PO {po_no} 已标记为 FB 引荐 - 此后将覆盖基于 Remarks 的自动检测；只影响此后新检测到的佣金。",
+        "flash.fb_override_saved_no": "PO {po_no} 已标记为非 FB 引荐 - 此后将覆盖基于 Remarks 的自动检测；只影响此后新检测到的佣金。",
     },
     "ms": {
         "nav.master_report": "Laporan Induk",
@@ -359,6 +381,9 @@ TRANSLATIONS = {
         "form.reason_required_placeholder": "Sebab (wajib diisi)",
         "form.trigger": "Pencetus",
         "form.po_no": "No. PO",
+        "form.fb_referred": "Rujukan FB?",
+        "form.fb_referred_yes": "Ya",
+        "form.fb_referred_no": "Tidak",
 
         "upload.heading": "Muat Naik Laporan Asas Komisen",
         "upload.help": "Muat naik fail Excel Laporan Induk Kenjin. Sistem akan menyemak setiap PO untuk komisen bayaran penuh atau ansuran yang baru tertunggak sejak muat naik terakhir.",
@@ -415,6 +440,8 @@ TRANSLATIONS = {
         "reports.voided_badge_title": "Muat naik semula fail AOR yang telah dibetulkan untuk menyelesaikan ini.",
         "reports.void_trigger_heading": "Batalkan pencetus AOR",
         "reports.void_trigger_help": "Untuk situasi apabila data AOR itu sendiri salah (PO salah, rujukan salah baca) - membersihkan resit dan tarikh bayaran supaya muat naik semula yang telah dibetulkan boleh digunakan. Jika data itu betul dan hanya pengiraan komisen yang salah, batalkan daripada \"Semak\" sebaliknya.",
+        "reports.fb_override_heading": "Betulkan penanda rujukan FB",
+        "reports.fb_override_help": "Untuk situasi apabila penanda FB-lead-referred sesuatu PO adalah salah - kakitangan terlupa menaip frasa rujukan ke dalam Kenjin, atau ia ditaip secara tersilap. Ini mengunci pembetulan anda: muat naik seterusnya tidak akan dapat menimpanya secara senyap lagi. Hanya menjejaskan komisen yang dikesan mulai sekarang - komisen yang telah disahkan kekal dengan jumlah asalnya.",
 
         "review.heading": "Semak proses komisen #{run_id}",
         "review.pending_heading": "Menunggu pengesahan anda",
@@ -463,6 +490,12 @@ TRANSLATIONS = {
         "flash.agency_updated": "Agensi {new_code!r} dikemas kini - hanya menjejaskan komisen yang dikesan mulai sekarang.",
         "flash.review_confirm_first": "Tiada apa-apa disahkan dalam proses ini lagi - semak dan sahkan dahulu.",
         "flash.nothing_confirmed_in_period": "Tiada apa-apa disahkan antara {start} dan {end} - tiada apa-apa untuk dieksport.",
+        "flash.fb_po_not_number": "Tidak dapat menyimpan itu - No. PO mestilah nombor.",
+        "flash.fb_invalid_choice": "Tidak dapat menyimpan itu - pilih Ya atau Tidak.",
+        "flash.fb_reason_required": "Sebab diperlukan untuk membetulkan penanda rujukan FB.",
+        "flash.fb_po_not_found": "Tidak dapat menyimpan itu - tiada kontrak dengan No. PO {po_no}.",
+        "flash.fb_override_saved_yes": "PO {po_no} ditandakan sebagai rujukan FB - ini menimpa pengesanan berasaskan Remarks mulai sekarang; hanya menjejaskan komisen yang dikesan mulai sekarang.",
+        "flash.fb_override_saved_no": "PO {po_no} ditandakan sebagai BUKAN rujukan FB - ini menimpa pengesanan berasaskan Remarks mulai sekarang; hanya menjejaskan komisen yang dikesan mulai sekarang.",
     },
 }
 

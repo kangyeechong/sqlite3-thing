@@ -12,7 +12,7 @@ import openpyxl
 import pytest
 
 from app.db.connection import get_connection, init_db
-from app.importer import import_master_report
+from app.importer import import_master_report, override_fb_lead_referred
 from tests.helpers import build_master_report
 
 # A real AOR export's header row, exactly as Kenjin produces it - it
@@ -757,4 +757,87 @@ def test_fb_lead_referred_from_remarks_is_also_sticky(tmp_path):
     assert conn.execute(
         "SELECT fb_lead_referred FROM contracts WHERE po_no = 70073"
     ).fetchone()["fb_lead_referred"] == 1  # still flagged
+    conn.close()
+
+
+def test_override_fb_lead_referred_raises_for_an_unknown_po(tmp_path):
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    with pytest.raises(ValueError):
+        override_fb_lead_referred(conn, 99999, True, "staff@xekl.com", "typo fix")
+    conn.close()
+
+
+def test_override_fb_lead_referred_sets_the_flag_and_audit_columns(tmp_path):
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 70080, "Customer ID": "CUSTR8", "Customer Name": "Customer R8",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+    }])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx_path))
+    conn.commit()
+
+    override_fb_lead_referred(conn, 70080, True, "staff@xekl.com", "Agent confirmed verbally, Remarks never updated")
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT fb_lead_referred, fb_lead_referred_overridden_by_user, fb_lead_referred_override_reason, "
+        "fb_lead_referred_overridden_at FROM contracts WHERE po_no = 70080"
+    ).fetchone()
+    assert row["fb_lead_referred"] == 1
+    assert row["fb_lead_referred_overridden_by_user"] == "staff@xekl.com"
+    assert row["fb_lead_referred_override_reason"] == "Agent confirmed verbally, Remarks never updated"
+    assert row["fb_lead_referred_overridden_at"] is not None
+    conn.close()
+
+
+def test_override_fb_lead_referred_survives_a_later_upload_in_either_direction(tmp_path):
+    """
+    The whole point of the override: once a human has manually
+    corrected this PO's flag, no later routine upload's Remarks-based
+    detection can silently flip it back - not even when that upload's
+    Remarks still (or again) carries the referral phrase, which would
+    otherwise win via the ordinary sticky MAX() rule.
+    """
+    xlsx1 = tmp_path / "upload1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 70081, "Customer ID": "CUSTR9", "Customer Name": "Customer R9",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Remarks": "Referral Sales from XEKL",  # a false positive, per the business
+    }])
+    db_path = _db_path(tmp_path)
+    init_db(db_path)
+    conn = get_connection(db_path)
+    import_master_report(conn, str(xlsx1))
+    conn.commit()
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 70081"
+    ).fetchone()["fb_lead_referred"] == 1
+
+    # Staff correct the false positive by hand.
+    override_fb_lead_referred(conn, 70081, False, "staff@xekl.com", "Not actually an FB lead - remarks typo'd")
+    conn.commit()
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 70081"
+    ).fetchone()["fb_lead_referred"] == 0
+
+    # A later routine upload still repeats the same (uncorrected,
+    # since nobody fixed it in Kenjin) Remarks phrase - without the
+    # override pin, MAX() would silently flip this straight back to 1.
+    xlsx2 = tmp_path / "upload2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 70081, "Customer ID": "CUSTR9", "Customer Name": "Customer R9",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Remarks": "Referral Sales from XEKL",
+    }])
+    import_master_report(conn, str(xlsx2))
+    conn.commit()
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 70081"
+    ).fetchone()["fb_lead_referred"] == 0  # override held
+
     conn.close()

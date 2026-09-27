@@ -1060,3 +1060,101 @@ def test_switching_language_redirects_back_to_the_referring_page(client):
     assert response.headers["Location"] == "http://localhost/login"
 
 
+def _override_fb_lead_referred(client, po_no, referred="yes", reason="staff correction"):
+    token = _csrf_token(client, "/reports")
+    return client.post(
+        "/override-fb-lead-referred",
+        data={"csrf_token": token, "po_no": str(po_no), "referred": referred, "reason": reason},
+        follow_redirects=True,
+    )
+
+
+def test_override_fb_lead_referred_route_requires_login(client):
+    response = client.post("/override-fb-lead-referred", data={"po_no": "1", "referred": "yes"})
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_override_fb_lead_referred_without_a_valid_csrf_token_is_rejected(client):
+    _login(client)
+    response = client.post(
+        "/override-fb-lead-referred",
+        data={"csrf_token": "made-up-token", "po_no": "1", "referred": "yes", "reason": "fix"},
+    )
+    assert response.status_code == 400
+
+
+def test_override_fb_lead_referred_with_a_non_numeric_po_no_is_rejected(client):
+    _login(client)
+    response = _override_fb_lead_referred(client, "not-a-number")
+    assert response.status_code == 200
+    assert b"PO No must be a number" in response.data
+
+
+def test_override_fb_lead_referred_with_an_invalid_choice_is_rejected(client):
+    _login(client)
+    token = _csrf_token(client, "/reports")
+    response = client.post(
+        "/override-fb-lead-referred",
+        data={"csrf_token": token, "po_no": "80200", "referred": "maybe", "reason": "fix"},
+        follow_redirects=True,
+    )
+    assert response.status_code == 200
+    assert b"choose Yes or No" in response.data
+
+
+def test_override_fb_lead_referred_without_a_reason_is_rejected(client):
+    _login(client)
+    response = _override_fb_lead_referred(client, 80200, reason="")
+    assert response.status_code == 200
+    assert b"reason is required" in response.data.lower()
+
+
+def test_override_fb_lead_referred_for_an_unknown_po_shows_a_clear_message(client):
+    _login(client)
+    response = _override_fb_lead_referred(client, 999999998)
+    assert response.status_code == 200
+    assert b"no contract with PO No" in response.data
+
+
+def test_override_fb_lead_referred_success_pins_the_flag_against_a_later_upload(client, tmp_path):
+    """
+    Full round trip through the actual HTTP layer: staff correct a
+    false-positive FB-lead flag via the web form, then a later Master
+    upload whose Remarks still repeats the referral phrase must not
+    silently undo that correction.
+    """
+    _login(client)
+    xlsx1 = tmp_path / "master1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 80201, "Customer ID": "CUSTWEBFB1", "Customer Name": "Web FB Customer 1",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Remarks": "Referral Sales from XEKL",
+    }])
+    _upload(client, xlsx1)
+
+    response = _override_fb_lead_referred(client, 80201, referred="no", reason="Remarks typo, not a real referral")
+    assert response.status_code == 200
+    assert b"marked as NOT FB-lead referred" in response.data
+
+    conn = get_connection(client.application.config["DB_PATH"])
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 80201"
+    ).fetchone()["fb_lead_referred"] == 0
+    conn.close()
+
+    xlsx2 = tmp_path / "master2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 80201, "Customer ID": "CUSTWEBFB1", "Customer Name": "Web FB Customer 1",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Remarks": "Referral Sales from XEKL",
+    }])
+    _upload(client, xlsx2)
+
+    conn = get_connection(client.application.config["DB_PATH"])
+    assert conn.execute(
+        "SELECT fb_lead_referred FROM contracts WHERE po_no = 80201"
+    ).fetchone()["fb_lead_referred"] == 0  # override held
+    conn.close()
+
+
