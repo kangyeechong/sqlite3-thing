@@ -313,6 +313,21 @@
           el.value = el.value.replace(/[^0-9]/g, "");
         }
 
+        // Clamps an out-of-range value down to its max the moment a
+        // second digit makes it impossible (day "40" -> "31", month
+        // "13" -> "12") - live feedback instead of only catching it
+        // after Process/Download is clicked. A single digit is left
+        // alone (day "3" might still become "31"), and a genuinely
+        // nonexistent combination that both individually look
+        // in-range (31/02) still isn't a real calendar date - that
+        // full check happens server-side (app.web.dates.
+        // parse_ddmmyyyy), which is the actual authority here.
+        function clamp(el, max) {
+          if (el.value.length >= 2 && parseInt(el.value, 10) > max) {
+            el.value = String(max);
+          }
+        }
+
         function sync() {
           if (day.value && month.value && year.value.length === 4) {
             hidden.value = pad(day.value, 2) + "/" + pad(month.value, 2) + "/" + year.value;
@@ -323,11 +338,13 @@
 
         day.addEventListener("input", function () {
           digitsOnly(day);
+          clamp(day, 31);
           if (day.value.length >= 2) month.focus();
           sync();
         });
         month.addEventListener("input", function () {
           digitsOnly(month);
+          clamp(month, 12);
           if (month.value.length >= 2) year.focus();
           sync();
         });
