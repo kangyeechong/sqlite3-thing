@@ -80,7 +80,7 @@ def _upload(client, file_path, filename="upload.xlsx", path="/upload", extra_dat
         )
 
 
-def _upload_aor(client, file_path, filename="aor.xlsx", period_start="2026-01-01", period_end="2026-12-31"):
+def _upload_aor(client, file_path, filename="aor.xlsx", period_start="01/01/2026", period_end="31/12/2026"):
     # Defaults to a wide-open period covering every test fixture's
     # dates, matching this route's behavior before period scoping
     # existed - a test that cares about the scoping itself passes its
@@ -521,7 +521,7 @@ def test_aor_upload_without_choosing_a_file_shows_a_clear_message(client):
     token = _csrf_token(client, "/upload-aor")
     response = client.post(
         "/upload-aor",
-        data={"csrf_token": token, "period_start": "2026-08-01", "period_end": "2026-08-31"},
+        data={"csrf_token": token, "period_start": "01/08/2026", "period_end": "31/08/2026"},
         content_type="multipart/form-data",
     )
     assert response.status_code == 400
@@ -543,11 +543,31 @@ def test_aor_upload_with_start_after_end_shows_a_clear_message(client):
     token = _csrf_token(client, "/upload-aor")
     response = client.post(
         "/upload-aor",
-        data={"csrf_token": token, "period_start": "2026-08-31", "period_end": "2026-08-01"},
+        data={"csrf_token": token, "period_start": "31/08/2026", "period_end": "01/08/2026"},
         content_type="multipart/form-data",
     )
     assert response.status_code == 400
     assert b"start date is after the end date" in response.data
+
+
+def test_aor_upload_with_a_malformed_date_shows_a_clear_message(client):
+    """
+    The date fields are plain text now (see app.web.dates' module
+    docstring - the native picker's format follows the browser's own
+    language setting, not anything this app can force), so someone can
+    type anything - an ISO date, a US-order date, plain garbage. All of
+    it should be rejected with a message pointing at DD/MM/YYYY, never
+    a raw 500.
+    """
+    _login(client)
+    token = _csrf_token(client, "/upload-aor")
+    response = client.post(
+        "/upload-aor",
+        data={"csrf_token": token, "period_start": "2026-08-01", "period_end": "31/08/2026"},
+        content_type="multipart/form-data",
+    )
+    assert response.status_code == 400
+    assert b"DD/MM/YYYY" in response.data
 
 
 def test_aor_full_flow_fills_paid_date_and_reaches_review(client, tmp_path):
@@ -633,7 +653,7 @@ def test_past_reports_lists_aor_uploads_even_with_nothing_newly_due(client, tmp_
     assert match is not None, "Past Reports should link to the annotated download"
     download_response = client.get(
         match.group(0).decode(),
-        query_string={"po_period_start": "2026-01-01", "po_period_end": "2026-12-31"},
+        query_string={"po_period_start": "01/01/2026", "po_period_end": "31/12/2026"},
     )
     assert download_response.status_code == 200
 
@@ -688,7 +708,7 @@ def test_aor_results_page_links_to_the_annotated_download(client, tmp_path):
 
     download_response = client.get(
         f"/download-aor-annotated/{run_id}",
-        query_string={"po_period_start": "2026-08-01", "po_period_end": "2026-08-31"},
+        query_string={"po_period_start": "01/08/2026", "po_period_end": "31/08/2026"},
     )
     assert download_response.status_code == 200
     assert download_response.headers["Content-Type"] == (
@@ -719,9 +739,19 @@ def test_download_aor_annotated_404s_for_an_unknown_run(client):
     _login(client)
     response = client.get(
         "/download-aor-annotated/999999",
-        query_string={"po_period_start": "2026-01-01", "po_period_end": "2026-12-31"},
+        query_string={"po_period_start": "01/01/2026", "po_period_end": "31/12/2026"},
     )
     assert response.status_code == 404
+
+
+def test_download_aor_annotated_with_a_malformed_date_shows_a_clear_message(client):
+    _login(client)
+    response = client.get(
+        "/download-aor-annotated/1",
+        query_string={"po_period_start": "2026-01-01", "po_period_end": "31/12/2026"},
+    )
+    assert response.status_code == 400
+    assert b"DD/MM/YYYY" in response.data
 
 
 def _void_aor_trigger(client, po_no, trigger_type="installment_1", reason="wrong PO matched"):
@@ -1156,5 +1186,44 @@ def test_override_fb_lead_referred_success_pins_the_flag_against_a_later_upload(
         "SELECT fb_lead_referred FROM contracts WHERE po_no = 80201"
     ).fetchone()["fb_lead_referred"] == 0  # override held
     conn.close()
+
+
+def test_download_period_requires_login(client):
+    response = client.get(
+        "/download-period", query_string={"period_start": "01/08/2026", "period_end": "31/08/2026"},
+    )
+    assert response.status_code == 302
+    assert "/login" in response.headers["Location"]
+
+
+def test_download_period_with_a_malformed_date_shows_a_clear_message(client):
+    _login(client)
+    response = client.get(
+        "/download-period", query_string={"period_start": "01/08/2026", "period_end": "2026-08-31"},
+    )
+    assert response.status_code == 400
+    assert b"DD/MM/YYYY" in response.data
+
+
+def test_download_period_success(client, tmp_path):
+    _login(client)
+    xlsx_master = tmp_path / "master.xlsx"
+    build_master_report(xlsx_master, [{
+        "No": 1, "PO No": 80300, "Customer ID": "CUSTPERIOD1", "Customer Name": "Period Customer",
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "PO Date": datetime.date(2026, 8, 10),
+        "Full Settlement Paid Date": datetime.date(2026, 8, 20),
+    }])
+    upload_response = _upload(client, xlsx_master)
+    match = re.search(rb"/review/(\d+)", upload_response.data)
+    _confirm_all_pending(client, int(match.group(1)))
+
+    response = client.get(
+        "/download-period", query_string={"period_start": "01/08/2026", "period_end": "31/08/2026"},
+    )
+    assert response.status_code == 200
+    assert response.headers["Content-Type"] == (
+        "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    )
 
 

@@ -30,6 +30,7 @@ from ..pipeline import (
 from ..report import TRIGGER_LABELS, generate_commission_run_report, generate_period_report
 from .auth import find_user_by_email, hash_password, login_required, verify_password
 from .csrf import validate_csrf_token
+from .dates import fmtdate, parse_ddmmyyyy
 from .i18n import t
 
 bp = Blueprint("web", __name__)
@@ -156,10 +157,16 @@ def upload_aor():
     # receipts genuinely dated in the chosen period get processed this
     # upload - see app.aor.import_aor_report's period_start/period_end
     # docstring for exactly what that does and doesn't do.
-    period_start = (request.form.get("period_start") or "").strip()
-    period_end = (request.form.get("period_end") or "").strip()
-    if not period_start or not period_end:
+    raw_period_start = (request.form.get("period_start") or "").strip()
+    raw_period_end = (request.form.get("period_end") or "").strip()
+    if not raw_period_start or not raw_period_end:
         flash(t("flash.enter_aor_date_range"), "error")
+        return render_template("aor_upload.html"), 400
+    try:
+        period_start = parse_ddmmyyyy(raw_period_start)
+        period_end = parse_ddmmyyyy(raw_period_end)
+    except ValueError as exc:
+        flash(str(exc), "error")
         return render_template("aor_upload.html"), 400
     if period_start > period_end:
         flash(t("flash.date_range_invalid"), "error")
@@ -223,10 +230,15 @@ def download_aor_annotated(upload_id):
     nothing newly due still has no commission_runs row at all, but its
     file is always worth annotating and downloading.
     """
-    po_period_start = (request.args.get("po_period_start") or "").strip()
-    po_period_end = (request.args.get("po_period_end") or "").strip()
-    if not po_period_start or not po_period_end:
+    raw_po_period_start = (request.args.get("po_period_start") or "").strip()
+    raw_po_period_end = (request.args.get("po_period_end") or "").strip()
+    if not raw_po_period_start or not raw_po_period_end:
         abort(400, description="po_period_start and po_period_end are both required.")
+    try:
+        po_period_start = parse_ddmmyyyy(raw_po_period_start)
+        po_period_end = parse_ddmmyyyy(raw_po_period_end)
+    except ValueError as exc:
+        abort(400, description=str(exc))
     if po_period_start > po_period_end:
         abort(400, description="po_period_start must not be after po_period_end.")
 
@@ -600,10 +612,15 @@ def download_period():
     the full standing ledger /download/<run_id> always shows. A plain
     GET with query params - this only reads already-persisted state.
     """
-    period_start = (request.args.get("period_start") or "").strip()
-    period_end = (request.args.get("period_end") or "").strip()
-    if not period_start or not period_end:
+    raw_period_start = (request.args.get("period_start") or "").strip()
+    raw_period_end = (request.args.get("period_end") or "").strip()
+    if not raw_period_start or not raw_period_end:
         abort(400, description="period_start and period_end are both required.")
+    try:
+        period_start = parse_ddmmyyyy(raw_period_start)
+        period_end = parse_ddmmyyyy(raw_period_end)
+    except ValueError as exc:
+        abort(400, description=str(exc))
     if period_start > period_end:
         abort(400, description="period_start must not be after period_end.")
 
@@ -613,7 +630,7 @@ def download_period():
         try:
             generate_period_report(conn, period_start, period_end, buffer)
         except ValueError:
-            flash(t("flash.nothing_confirmed_in_period", start=period_start, end=period_end), "warning")
+            flash(t("flash.nothing_confirmed_in_period", start=fmtdate(period_start), end=fmtdate(period_end)), "warning")
             return redirect(url_for("web.reports"))
     finally:
         conn.close()

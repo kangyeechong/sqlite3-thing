@@ -1,16 +1,31 @@
 """
-A single Jinja filter (`fmtdate`) that renders a stored ISO date or
-timestamp string as DD/MM/YYYY - the business's own convention
-everywhere else (confirmed against the real file's Remarks -
-"Inurnment: 04/06/2026" - and its historical "As at DD/MM/YYYY"
+Two small helpers that keep DD/MM/YYYY - the business's own
+convention everywhere else (confirmed against the real file's Remarks
+- "Inurnment: 04/06/2026" - and its historical "As at DD/MM/YYYY"
 summary rows; see app.report._DATE_FORMAT's comment for the same
-reasoning applied to the downloaded Excel reports). Every date is
-still stored as ISO (YYYY-MM-DD, or a full isoformat() timestamp) in
-the database - this only changes how it's displayed on a page, never
-how it's stored or compared.
+reasoning applied to the downloaded Excel reports) - at the edges of
+the web layer only:
+
+  - fmtdate: a Jinja filter that renders a stored ISO date/timestamp
+    string as DD/MM/YYYY for display.
+  - parse_ddmmyyyy: converts a DD/MM/YYYY string typed into a form
+    field back to the ISO YYYY-MM-DD every other layer of this app
+    (app.aor, app.report, app.pipeline, the database itself) stores
+    and compares dates as.
+
+Both exist because the native HTML date-picker's displayed format
+turns out to follow each browser's own language setting (confirmed via
+a real user report - Chrome showing MM/DD/YYYY even on a Malaysia-
+based machine, because Chrome's language list had "English (United
+States)" ahead of a UK/Malaysia one), not anything this app's own code
+can force. Every date field a person actually types into is a plain
+text input with a DD/MM/YYYY placeholder instead, guaranteed
+consistent on every machine regardless of any browser setting - the
+trade-off being no native calendar pop-up.
 """
 
 import datetime
+import re
 
 
 def fmtdate(value):
@@ -34,3 +49,29 @@ def fmtdate(value):
         return datetime.datetime.fromisoformat(value).strftime("%d/%m/%Y %H:%M")
     except ValueError:
         return value
+
+
+_DDMMYYYY = re.compile(r"(\d{2})/(\d{2})/(\d{4})")
+
+
+def parse_ddmmyyyy(value):
+    """
+    Parses a DD/MM/YYYY string into the ISO YYYY-MM-DD string every
+    other layer of this app expects - the conversion happens here,
+    once, at the point a route first reads it out of the request, so
+    nothing below the web layer needs to know DD/MM/YYYY text input
+    exists at all.
+
+    Raises ValueError, with a message safe to show directly to
+    whoever typed it, if `value` isn't in that exact shape, OR is that
+    shape but not a real calendar date (31/02/2026) - never silently
+    rounds or reinterprets it.
+    """
+    match = _DDMMYYYY.fullmatch((value or "").strip())
+    if match is None:
+        raise ValueError(f"{value!r} isn't a valid date - use DD/MM/YYYY.")
+    day, month, year = (int(part) for part in match.groups())
+    try:
+        return datetime.date(year, month, day).isoformat()
+    except ValueError:
+        raise ValueError(f"{value!r} isn't a valid date - use DD/MM/YYYY.")
