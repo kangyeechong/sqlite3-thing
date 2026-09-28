@@ -72,7 +72,7 @@ TRANSLATIONS = {
         "form.fb_referred_no": "No",
 
         "upload.heading": "Upload Commission Base Report",
-        "upload.help": "Upload the Kenjin Master report Excel file. The system will check every PO for newly-due full-payment or instalment commission since the last upload.",
+        "upload.help": "Upload the Kenjin Base report Excel file. The system will check every PO for newly-due full-payment or instalment commission since the last upload.",
         "upload.aor_instead_lead": "Got payments to log from the AOR export instead?",
         "upload.aor_link_text": "Upload AOR Report",
         "upload.file_label": "Commission Base Report (.xlsx)",
@@ -229,7 +229,7 @@ TRANSLATIONS = {
         "form.fb_referred_no": "否",
 
         "upload.heading": "上传佣金基础报表",
-        "upload.help": "上传 Kenjin 主报表 Excel 文件。系统将检查每个 PO 自上次上传以来是否有新的全额付款或分期付款佣金到期。",
+        "upload.help": "上传 Kenjin 基础报表 Excel 文件。系统将检查每个 PO 自上次上传以来是否有新的全额付款或分期付款佣金到期。",
         "upload.aor_instead_lead": "要改为记录 AOR 收款确认单的付款吗？",
         "upload.aor_link_text": "上传 AOR 报表",
         "upload.file_label": "佣金基础报表 (.xlsx)",
@@ -386,7 +386,7 @@ TRANSLATIONS = {
         "form.fb_referred_no": "Tidak",
 
         "upload.heading": "Muat Naik Laporan Asas Komisen",
-        "upload.help": "Muat naik fail Excel Laporan Induk Kenjin. Sistem akan menyemak setiap PO untuk komisen bayaran penuh atau ansuran yang baru tertunggak sejak muat naik terakhir.",
+        "upload.help": "Muat naik fail Excel Laporan Asas Kenjin. Sistem akan menyemak setiap PO untuk komisen bayaran penuh atau ansuran yang baru tertunggak sejak muat naik terakhir.",
         "upload.aor_instead_lead": "Nak catat pembayaran daripada eksport AOR sebaliknya?",
         "upload.aor_link_text": "Muat Naik Laporan AOR",
         "upload.file_label": "Laporan Asas Komisen (.xlsx)",
