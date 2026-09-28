@@ -784,9 +784,11 @@ def test_cooling_off_period_shows_expired_on_an_instalment_row_too(tmp_path):
     assert row["Cooling Off Period"] == "EXPIRED"
 
 
-def test_cooling_off_period_is_blank_when_signature_date_is_too_recent(tmp_path):
+def test_cooling_off_period_shows_running_when_signature_date_is_too_recent(tmp_path):
     """The flip side: a PO signed only a few days ago hasn't cleared
-    the cooling-off window yet, so the column stays blank, not EXPIRED."""
+    the cooling-off window yet, so the column shows RUNNING, not
+    EXPIRED - and not blank either, since there IS a signature date to
+    measure from (blank is reserved for no signature date at all)."""
     today = datetime.date.today()
 
     xlsx_path = tmp_path / "upload.xlsx"
@@ -808,6 +810,36 @@ def test_cooling_off_period_is_blank_when_signature_date_is_too_recent(tmp_path)
     workbook = openpyxl.load_workbook(report_path)
     _, all_rows = _find_table_rows(workbook["All"])
     row = next(r for r in all_rows if r["PO No"] == 60021)
+    assert row["Cooling Off Period"] == "RUNNING"
+
+
+def test_cooling_off_period_is_blank_with_no_signature_date_at_all(tmp_path):
+    """
+    Kang's request: RUNNING only makes sense when there's actually a
+    Signature Date to measure the cooling-off window from - a PO with
+    no Signature Date on file at all has nothing to compute, so the
+    column stays blank rather than claiming a window is running.
+    """
+    today = datetime.date.today()
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60022, "Customer ID": "CUST222", "Customer Name": "Customer 222",
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": today,
+        "Agency Code": "AC001",
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    confirm_all_pending(db_path, result["commission_run_id"])
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    _, all_rows = _find_table_rows(workbook["All"])
+    row = next(r for r in all_rows if r["PO No"] == 60022)
     assert row["Cooling Off Period"] is None
 
 

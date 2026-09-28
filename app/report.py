@@ -179,14 +179,15 @@ def _cooling_off_status(signature_date_str, run_date):
     """
     "Cooling Off Period" in the real file is a general per-PO field -
     it shows EXPIRED once COOLING_OFF_TOTAL_DAYS have passed since
-    Signature Date, on every row that has a signature date on file, no
-    matter which commission trigger (if any) brought that row into
-    this report. Confirmed against the real file: rows with an
-    instalment due, not just a full payment due, show EXPIRED too, and
-    a PO with no payment activity at all still shows EXPIRED as long
-    as it's old enough - this is unrelated to
-    COOLING_OFF_DAYS_BEFORE_RELEASE (which only gates when full
-    payment commission itself becomes releasable).
+    Signature Date, RUNNING while still inside that window, on every
+    row that has a signature date on file, no matter which commission
+    trigger (if any) brought that row into this report. Confirmed
+    against the real file: rows with an instalment due, not just a
+    full payment due, show EXPIRED too, and a PO with no payment
+    activity at all still shows EXPIRED as long as it's old enough -
+    this is unrelated to COOLING_OFF_DAYS_BEFORE_RELEASE (which only
+    gates when full payment commission itself becomes releasable).
+    Blank only when there's no Signature Date to measure from at all.
     """
     if not signature_date_str:
         return None
@@ -194,7 +195,7 @@ def _cooling_off_status(signature_date_str, run_date):
     as_of = run_date if isinstance(run_date, datetime.date) else datetime.date.fromisoformat(run_date)
     if (as_of - signature_date).days >= rules.COOLING_OFF_TOTAL_DAYS:
         return "EXPIRED"
-    return None
+    return "RUNNING"
 
 
 # Exact-match only, not a substring purge - these are the only two
