@@ -18,7 +18,7 @@
             <td>{{ event.agency_code }}</td>
             <td>{{ event.agent_name }}</td>
             <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
-            <td>{{ event.trigger_date }}</td>
+            <td>{{ event.trigger_date | fmtdate }}</td>
             <td class="money">{{ "%.2f"|format(event.amount) }}</td>
           </tr>
         {% endfor %}
@@ -41,7 +41,7 @@
           <td>{{ event.agency_code }}</td>
           <td>{{ event.agent_name }}</td>
           <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
-          <td>{{ event.trigger_date }}</td>
+          <td>{{ event.trigger_date | fmtdate }}</td>
           <td class="money">{{ "%.2f"|format(event.amount) }}</td>
           <td>
             <form method="post" action="{{ url_for('web.void_review_event', run_id=run_id) }}">
@@ -70,7 +70,7 @@
           <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
           <td class="money">{{ "%.2f"|format(event.amount) }}</td>
           <td>{{ event.voided_by_user }}</td>
-          <td>{{ event.voided_at }}</td>
+          <td>{{ event.voided_at | fmtdate }}</td>
           <td>{{ event.void_reason }}</td>
         </tr>
       {% endfor %}

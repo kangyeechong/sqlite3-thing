@@ -2,10 +2,10 @@
 {% block title %}{{ t("results.heading") }}{% endblock %}
 {% block content %}
   <h1>{{ t("results.heading") }}</h1>
-  <p class="muted">{{ t("aor_results.period_processed", start=period_start, end=period_end) }}</p>
+  <p class="muted">{{ t("aor_results.period_processed", start=period_start | fmtdate, end=period_end | fmtdate) }}</p>
   <p>{{ t("aor_results.receipts_summary_one" if import_result.receipts_seen == 1 else "aor_results.receipts_summary_many", seen=import_result.receipts_seen, new=import_result.receipts_imported, written=import_result.paid_dates_written, written_suffix=("" if import_result.paid_dates_written == 1 else "s")) }}</p>
   {% if import_result.receipts_outside_period %}
-    <p class="muted">{{ t("aor_results.outside_period_one" if import_result.receipts_outside_period == 1 else "aor_results.outside_period_many", count=import_result.receipts_outside_period, start=period_start, end=period_end) }}</p>
+    <p class="muted">{{ t("aor_results.outside_period_one" if import_result.receipts_outside_period == 1 else "aor_results.outside_period_many", count=import_result.receipts_outside_period, start=period_start | fmtdate, end=period_end | fmtdate) }}</p>
   {% endif %}
 
   <p class="muted">{{ t("aor_results.download_help") }}</p>
@@ -45,7 +45,7 @@
         <tr>
           <td>{{ event.po_no }}</td>
           <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
-          <td>{{ event.trigger_date }}</td>
+          <td>{{ event.trigger_date | fmtdate }}</td>
           <td class="money">{{ "%.2f"|format(event.amount) }}</td>
         </tr>
       {% endfor %}

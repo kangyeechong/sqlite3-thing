@@ -487,8 +487,43 @@ def test_commission_paid_dates_are_read_back_from_the_sheet(tmp_path):
     _, all_rows = _find_table_rows(workbook["All"])
     row = all_rows[0]
     assert row["Full Commission Paid Date"] is None  # Accounts never filled this one in
-    assert row["1st Half Commission Paid Date"] == (today - datetime.timedelta(days=50)).isoformat()
-    assert row["Balance Half Commission Paid Date"] == today.isoformat()
+    assert row["1st Half Commission Paid Date"].date() == today - datetime.timedelta(days=50)
+    assert row["Balance Half Commission Paid Date"].date() == today
+
+
+def test_date_columns_are_real_dates_formatted_dd_mm_yyyy(tmp_path):
+    """
+    Regression test: date columns used to be written as whatever plain
+    ISO string (YYYY-MM-DD) the database happened to store, showing up
+    in the downloaded file as literal text like "2026-08-03" - neither
+    a real, sortable Excel date nor the DD/MM/YYYY format the business
+    actually uses everywhere else (confirmed against the real file's
+    own Remarks/summary rows - see _DATE_FORMAT's comment). Fixed by
+    converting to a real date and setting number_format explicitly.
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60028, "Customer ID": "CUST228", "Customer Name": "Customer 228",
+        "PO Date": datetime.date(2026, 8, 3), "Signature Date": datetime.date(2026, 8, 4),
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Full Settlement Paid Date": datetime.date(2026, 8, 20),
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 8, 27))
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["All"]
+    header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
+    headers = [cell.value for cell in sheet[header_row_num]]
+    po_date_cell = sheet.cell(row=header_row_num + 1, column=headers.index("PO Date") + 1)
+
+    assert po_date_cell.value == datetime.datetime(2026, 8, 3)
+    assert po_date_cell.number_format == "dd/mm/yyyy"
 
 
 def test_full_payment_row_is_shaded_green_matching_the_real_file(tmp_path):

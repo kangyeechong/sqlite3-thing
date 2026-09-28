@@ -14,6 +14,7 @@ from flask import Flask, abort, redirect, render_template, request, session, url
 
 from ..db.connection import init_db
 from .csrf import get_csrf_token, validate_csrf_token
+from .dates import fmtdate
 from .i18n import LANGUAGES, t
 from .routes import bp as web_blueprint
 
@@ -82,6 +83,7 @@ def create_app(db_path, secret_key=None):
     # callable directly in any template without every route having to
     # remember to pass them in explicitly.
     app.context_processor(lambda: {"csrf_token": get_csrf_token, "t": t, "languages": LANGUAGES})
+    app.jinja_env.filters["fmtdate"] = fmtdate
 
     @app.route("/")
     def index():

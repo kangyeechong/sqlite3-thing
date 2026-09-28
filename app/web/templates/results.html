@@ -32,19 +32,19 @@
         <tr>
           <td>{{ event.po_no }}</td>
           <td>{{ trigger_labels.get(event.trigger_type, event.trigger_type) }}</td>
-          <td>{{ event.trigger_date }}</td>
+          <td>{{ event.trigger_date | fmtdate }}</td>
           <td class="money">{{ "%.2f"|format(event.amount) }}</td>
         </tr>
       {% endfor %}
     </table>
     <p><a class="button" href="{{ url_for('web.review', run_id=commission_run_id) }}">{{ t("action.review_confirm") }}</a></p>
     {% if import_result.new_po_date_min %}
-      <p class="muted">{{ t("results.after_confirming", start=import_result.new_po_date_min, end=import_result.new_po_date_max) }}</p>
+      <p class="muted">{{ t("results.after_confirming", start=import_result.new_po_date_min | fmtdate, end=import_result.new_po_date_max | fmtdate) }}</p>
     {% endif %}
   {% else %}
     <p class="muted">{{ t("results.nothing_newly_due", link='<a href="' + url_for('web.reports') + '">' + t("nav.past_reports") + '</a>') | safe }}</p>
     {% if import_result.new_po_date_min %}
-      <p><a class="button" href="{{ url_for('web.download_period', period_start=import_result.new_po_date_min, period_end=import_result.new_po_date_max) }}">{{ t("results.download_period_report", start=import_result.new_po_date_min, end=import_result.new_po_date_max) }}</a></p>
+      <p><a class="button" href="{{ url_for('web.download_period', period_start=import_result.new_po_date_min, period_end=import_result.new_po_date_max) }}">{{ t("results.download_period_report", start=import_result.new_po_date_min | fmtdate, end=import_result.new_po_date_max | fmtdate) }}</a></p>
     {% endif %}
   {% endif %}
 

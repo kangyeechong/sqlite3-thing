@@ -285,6 +285,37 @@ def test_annotate_aor_file_uses_the_files_own_purchase_statement_date_not_the_le
     assert [r[0] for r in rows] == ["TRF 10/08/2026 (INST 01/24)"]
 
 
+def test_annotate_aor_file_date_columns_use_dd_mm_yyyy(tmp_path):
+    """
+    Regression test: openpyxl reads a date-formatted cell back as a
+    real datetime, but writing that same value into a brand-new cell
+    (as every new sheet here does) carries no formatting along with
+    it - it lands on Excel's own generic default ("yyyy-mm-dd
+    h:mm:ss", confirmed by inspecting the actual written cells before
+    this fix), not the DD/MM/YYYY the business actually uses (matching
+    the real file's own Remarks/summary-row convention - see
+    app.report._DATE_FORMAT's comment). Fixed by setting
+    number_format explicitly on every known date column.
+    """
+    xlsx_aor = tmp_path / "aor.xlsx"
+    build_aor_report(xlsx_aor, [{
+        "No": 1, "Acknowledgment Receipt No": "RC-TEST-DATEFMT",
+        "Acknowledgment Receipt Date": datetime.date(2026, 8, 15),
+        "Purchase Statement Date": datetime.date(2026, 8, 5),
+        "PO No": 90101, "Customer ID": "CUSTDATEFMT", "Customer Name": "Customer DateFmt",
+        "Reference No": "TRF 15/08/2026 FULL SETTLEMENT",
+    }])
+
+    output_path = tmp_path / "annotated.xlsx"
+    annotate_aor_file(str(xlsx_aor), str(output_path), "2026-08-01", "2026-08-31")
+
+    sheet = openpyxl.load_workbook(output_path)["Payments (PO Date)"]
+    headers = [cell.value for cell in sheet[1]]
+    for header in ("Acknowledgment Receipt Date", "Purchase Statement Date"):
+        cell = sheet.cell(row=2, column=headers.index(header) + 1)
+        assert cell.number_format == "dd/mm/yyyy", f"{header} was {cell.number_format!r}"
+
+
 def test_annotate_aor_file_excludes_a_row_whose_purchase_statement_date_is_outside_the_range(tmp_path):
     xlsx_aor = tmp_path / "aor.xlsx"
     build_aor_report(xlsx_aor, [{

@@ -39,6 +39,14 @@ _BODY_FONT = Font(name="Arial", size=11)
 _HEADER_FONT = Font(name="Arial", size=11, bold=True)
 _TITLE_FONT = Font(name="Arial", size=13, bold=True)
 _MONEY_FORMAT = "#,##0.00"
+# The business's own convention throughout (confirmed against the real
+# file's Remarks - "Inurnment: 04/06/2026" - and its historical "As at
+# DD/MM/YYYY" summary rows) is DD/MM/YYYY, never the ISO YYYY-MM-DD
+# this app stores internally for sorting/comparison. Applied to every
+# per-row date cell below (see _DATE_COLUMNS) so the downloaded report
+# reads the same way the real file always has, instead of leaking the
+# internal storage format to Accounts.
+_DATE_FORMAT = "dd/mm/yyyy"
 
 # Green matched against the real sample file's actual cell formatting
 # (not guessed): rows there use theme accent6 (#70AD47) tinted 0.6,
@@ -132,6 +140,14 @@ _COLUMNS = [
 _MONEY_COLUMNS = {
     "Niche/Tablet Price (RM)", "Promotion (RM)", "Discount (RM)", "Nett Price (RM)",
     "Full Payment Commission (RM)", "1st Half Commission (RM)", "Balance Half Commission (RM)",
+}
+# Every genuine date column in _COLUMNS above - "Cooling Off Period" is
+# a status word ("EXPIRED"/blank), not a date, so it's deliberately
+# left out here.
+_DATE_COLUMNS = {
+    "PO Date", "Signature Date", "Full Settlement Paid Date", "Full Commission Paid Date",
+    "First Instalment Paid Date", "1st Half Commission Paid Date",
+    "Sixth Instalment Paid Date", "Balance Half Commission Paid Date",
 }
 # Instalment columns that get a yellow CELL highlight when THIS run put
 # a value in them. Full payment doesn't get a cell highlight - it gets
@@ -1053,11 +1069,20 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
                 value = None
             else:
                 value = row.get(key)
+            # Every date column is stored as a plain ISO string
+            # (YYYY-MM-DD) in the database - converted to a real date
+            # here (not just re-formatted as text) so it stays an
+            # actual Excel date Accounts can sort/filter on, not text
+            # that merely looks like one.
+            if label in _DATE_COLUMNS and isinstance(value, str):
+                value = datetime.date.fromisoformat(value)
             cell = sheet.cell(row=row_num, column=col, value=value)
             cell.font = _BODY_FONT
             cell.border = _THIN_BORDER
             if label in _MONEY_COLUMNS:
                 cell.number_format = _MONEY_FORMAT
+            elif label in _DATE_COLUMNS:
+                cell.number_format = _DATE_FORMAT
             if is_cancelled_row:
                 cell.fill = _BEIGE_FILL
             elif is_fully_paid_row:

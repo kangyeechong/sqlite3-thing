@@ -61,6 +61,21 @@ _AOR_REQUIRED_HEADERS = (
     "No", "Acknowledgment Receipt No", "PO No", "Reference No", "Acknowledgment Receipt Date",
 )
 
+# Every date column the real AOR export carries. openpyxl reads a
+# cell Excel formatted as a date back as a genuine datetime object
+# (not a string), so copying that value into a brand-new cell in
+# annotate_aor_file's new sheets carries no formatting along with it -
+# it lands on Excel's own generic default ("yyyy-mm-dd h:mm:ss",
+# confirmed by inspecting the actual written cells), not the
+# DD/MM/YYYY the business actually uses everywhere else (see
+# app.report._DATE_FORMAT's comment for the same convention,
+# confirmed against the real file's own Remarks/summary rows). Set
+# explicitly on each of these columns' cells so the annotated copy
+# reads the same way the original file does, with no stray time-of-day
+# component tacked on.
+_AOR_DATE_FORMAT = "dd/mm/yyyy"
+_AOR_DATE_COLUMNS = {"Acknowledgment Receipt Date", "Purchase Statement Date", "Date Created"}
+
 # Captures the run of digits/slashes/commas/ampersands/whitespace right
 # after "INST" - e.g. "15/24" or "22/24, 23/24 & 24/24" - stopping
 # naturally at the first character that isn't part of that run (a ")"
@@ -732,6 +747,7 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
 
     output_workbook = openpyxl.load_workbook(file_path)  # untouched - this is what gets kept as-is
     output_headers = (headers or []) + ["Trigger Type", "Source File"]
+    date_cols = {i for i, h in enumerate(output_headers, start=1) if h in _AOR_DATE_COLUMNS}
 
     def _write_sheet(name, rows):
         sheet_name = name
@@ -747,6 +763,8 @@ def annotate_aor_file(file_path, output, po_period_start, po_period_end):
                 cell = sheet.cell(row=row_offset, column=col, value=value)
                 if fill is not None:
                     cell.fill = fill
+                if col in date_cols:
+                    cell.number_format = _AOR_DATE_FORMAT
 
     if headers is not None:
         _write_sheet("Payments (PO Date)", payment_rows)
