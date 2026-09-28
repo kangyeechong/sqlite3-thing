@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as macros %}
 {% block title %}{{ t("aor_upload.heading") }}{% endblock %}
 {% block content %}
   <h1>{{ t("aor_upload.heading") }}</h1>
@@ -8,10 +9,10 @@
     <input type="hidden" name="csrf_token" value="{{ csrf_token() }}">
     <p class="muted">{{ t("aor_upload.period_help") }}</p>
     <label>{{ t("form.period_start") }}
-      <input type="text" name="period_start" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required>
+      {{ macros.date_parts("period_start") }}
     </label>
     <label>{{ t("form.period_end") }}
-      <input type="text" name="period_end" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required>
+      {{ macros.date_parts("period_end") }}
     </label>
     <label>{{ t("aor_upload.file_label") }}
       <input type="file" name="report_file" accept=".xlsx" required>

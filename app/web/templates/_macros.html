@@ -1,0 +1,17 @@
+{# Three separate DD / MM / YYYY boxes instead of one free-typed text
+   field - the "/" is a real border between inputs, not just a
+   character someone has to type in the right place, so day only ever
+   takes 1-31, month only 1-12, year only four digits. Combined into
+   one hidden field (same name/format every route already expects -
+   see app.web.dates.parse_ddmmyyyy) by the shared script in
+   base.html, so no route or test needed to change for this. #}
+{% macro date_parts(name, required=True) %}
+<span class="date-parts" data-field="{{ name }}">
+  <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" class="date-day" placeholder="DD" aria-label="Day" {% if required %}required{% endif %}>
+  <span class="date-sep">/</span>
+  <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="2" class="date-month" placeholder="MM" aria-label="Month" {% if required %}required{% endif %}>
+  <span class="date-sep">/</span>
+  <input type="text" inputmode="numeric" pattern="[0-9]*" maxlength="4" class="date-year" placeholder="YYYY" aria-label="Year" {% if required %}required{% endif %}>
+  <input type="hidden" name="{{ name }}">
+</span>
+{% endmacro %}

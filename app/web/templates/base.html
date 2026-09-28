@@ -211,6 +211,20 @@
     }
     .muted { color: var(--muted); font-size: 13.5px; }
 
+    /* DD / MM / YYYY boxes (see _macros.html's date_parts) - narrow
+       enough to read as three small fields, not one wide text box,
+       with the "/" sitting between them as a real visual border. */
+    .date-parts { display: inline-flex; align-items: center; gap: 4px; margin-top: 4px; }
+    .date-parts input {
+      display: inline-block;
+      margin-top: 0;
+      width: 3em;
+      text-align: center;
+      padding: 8px 4px;
+    }
+    .date-parts input.date-year { width: 4.5em; }
+    .date-sep { color: var(--muted); }
+
     .theme-toggle {
       background: transparent;
       border: 1px solid var(--line);
@@ -279,5 +293,59 @@
     {% endif %}
   {% endwith %}
   {% block content %}{% endblock %}
+  <script>
+    // Combines each DD / MM / YYYY triple (see _macros.html's
+    // date_parts) into one DD/MM/YYYY string in its hidden field -
+    // the same field name and format every route already parses (see
+    // app.web.dates.parse_ddmmyyyy), so this is purely a typing aid,
+    // never something a route needs to know exists.
+    (function () {
+      function pad(value, length) {
+        return value.padStart(length, "0");
+      }
+      document.querySelectorAll(".date-parts").forEach(function (group) {
+        var day = group.querySelector(".date-day");
+        var month = group.querySelector(".date-month");
+        var year = group.querySelector(".date-year");
+        var hidden = group.querySelector("input[type=hidden]");
+
+        function digitsOnly(el) {
+          el.value = el.value.replace(/[^0-9]/g, "");
+        }
+
+        function sync() {
+          if (day.value && month.value && year.value.length === 4) {
+            hidden.value = pad(day.value, 2) + "/" + pad(month.value, 2) + "/" + year.value;
+          } else {
+            hidden.value = "";
+          }
+        }
+
+        day.addEventListener("input", function () {
+          digitsOnly(day);
+          if (day.value.length >= 2) month.focus();
+          sync();
+        });
+        month.addEventListener("input", function () {
+          digitsOnly(month);
+          if (month.value.length >= 2) year.focus();
+          sync();
+        });
+        year.addEventListener("input", function () {
+          digitsOnly(year);
+          sync();
+        });
+
+        var formEl = group.closest("form");
+        if (formEl) {
+          // A safety net, not just a nicety - the per-keystroke sync
+          // above can be skipped (e.g. tabbing away after one digit),
+          // so the hidden field must be brought up to date one more
+          // time right before the browser actually submits it.
+          formEl.addEventListener("submit", sync);
+        }
+      });
+    })();
+  </script>
 </body>
 </html>

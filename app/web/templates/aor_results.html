@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as macros %}
 {% block title %}{{ t("results.heading") }}{% endblock %}
 {% block content %}
   <h1>{{ t("results.heading") }}</h1>
@@ -11,10 +12,10 @@
   <p class="muted">{{ t("aor_results.download_help") }}</p>
   <form method="get" action="{{ url_for('web.download_aor_annotated', upload_id=aor_upload_id) }}">
     <label>{{ t("form.po_period_start") }}
-      <input type="text" name="po_period_start" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required>
+      {{ macros.date_parts("po_period_start") }}
     </label>
     <label>{{ t("form.po_period_end") }}
-      <input type="text" name="po_period_end" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required>
+      {{ macros.date_parts("po_period_end") }}
     </label>
     <button class="button" type="submit">{{ t("aor_results.download_button") }}</button>
   </form>

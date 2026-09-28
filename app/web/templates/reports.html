@@ -1,4 +1,5 @@
 {% extends "base.html" %}
+{% import "_macros.html" as macros %}
 {% block title %}{{ t("reports.heading") }}{% endblock %}
 {% block content %}
   <h1>{{ t("reports.heading") }}</h1>
@@ -49,10 +50,10 @@
   <p class="muted">{{ t("reports.period_help") }}</p>
   <form method="get" action="{{ url_for('web.download_period') }}">
     <label>{{ t("form.period_start") }}
-      <input type="text" name="period_start" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required>
+      {{ macros.date_parts("period_start") }}
     </label>
     <label>{{ t("form.period_end") }}
-      <input type="text" name="period_end" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required>
+      {{ macros.date_parts("period_end") }}
     </label>
     <button class="button" type="submit">{{ t("reports.download_period_button") }}</button>
   </form>
@@ -74,8 +75,8 @@
           </td>
           <td>
             <form method="get" action="{{ url_for('web.download_aor_annotated', upload_id=upload.id) }}">
-              <label>{{ t("form.po_period_start") }} <input type="text" name="po_period_start" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required></label>
-              <label>{{ t("form.po_period_end") }} <input type="text" name="po_period_end" placeholder="DD/MM/YYYY" pattern="\d{2}/\d{2}/\d{4}" inputmode="numeric" required></label>
+              <label>{{ t("form.po_period_start") }} {{ macros.date_parts("po_period_start") }}</label>
+              <label>{{ t("form.po_period_end") }} {{ macros.date_parts("po_period_end") }}</label>
               <button class="button" type="submit">{{ t("aor_results.download_button") }}</button>
             </form>
           </td>
