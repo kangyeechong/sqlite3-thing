@@ -214,7 +214,7 @@ def _clean_remarks(remarks):
     return remarks
 
 
-def _load_master_rows(conn, commission_run_id, run_date, period_start=None, period_end=None, latest_run_id=None):
+def _load_master_rows(conn, commission_run_id, period_start=None, period_end=None, latest_run_id=None):
     """
     Every contract in the database, always - paid, still pending, or
     cancelled/withdrawn. A PO that hasn't paid anything yet, or was
@@ -231,9 +231,19 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
     any) are the newly-added ones to highlight yellow, versus older
     confirmed figures that just carry forward plainly.
 
-    `run_date` is needed to compute each row's Cooling Off Period
-    status (EXPIRED once COOLING_OFF_TOTAL_DAYS have passed since
-    Signature Date - see _cooling_off_status).
+    Cooling Off Period status (EXPIRED once COOLING_OFF_TOTAL_DAYS have
+    passed since Signature Date - see _cooling_off_status) is always
+    computed against the REAL today (datetime.date.today()), never a
+    frozen run_date or period_end - a real bug, found via a team
+    report: re-downloading an old run's report (or a period report
+    whose period_end was some past date) showed EXPIRED failing to
+    fire on POs that had genuinely cleared cooling-off long ago,
+    because the "how many days have passed" math was silently anchored
+    to that stale date instead of the actual calendar day the report
+    was generated on. This directly broke the documented promise (see
+    reports.confirmed_help in app.web.i18n) that a download "always
+    reflects today's full ledger, not a snapshot from when it was
+    first processed."
 
     period_start/period_end (both required together, or both left
     None): switches to the scoped mode generate_period_report uses.
@@ -306,7 +316,7 @@ def _load_master_rows(conn, commission_run_id, run_date, period_start=None, peri
             # Cancelled/withdrawn rows are shaded beige in _write_table
             # regardless of any commission history - see is_cancelled_row.
             "status": r["status"],
-            "cooling_off_period": _cooling_off_status(r["signature_date"], run_date),
+            "cooling_off_period": _cooling_off_status(r["signature_date"], datetime.date.today()),
             # The paid-date itself is a raw fact from the sheet, shown
             # whether or not the resulting commission has been
             # confirmed yet; the commission figure below only appears
@@ -1313,6 +1323,14 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
         "SELECT run_date FROM commission_runs WHERE id = ?", (commission_run_id,)
     ).fetchone()
     run_date = run_row["run_date"]
+    # The title's "AS AT {date}" and the Cooling Off Period column both
+    # need the REAL today, not this run's own frozen run_date - a
+    # download reflects today's full ledger even when it's an old run
+    # being re-downloaded weeks later (see reports.confirmed_help).
+    # run_date itself stays correct for _write_table's own "movement
+    # as at {date}" line below, which genuinely IS about when this
+    # specific run's confirmations happened, not today.
+    today = datetime.date.today()
 
     # The report itself always shows every contract (see
     # _load_master_rows), so an empty result there would only mean an
@@ -1329,13 +1347,13 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
             "the detected commissions before downloading."
         )
 
-    rows = _load_master_rows(conn, commission_run_id, run_date)
+    rows = _load_master_rows(conn, commission_run_id)
     column_count = len(_COLUMNS)
 
     workbook = Workbook()
     all_sheet = workbook.active
     all_sheet.title = "All"
-    next_row = _write_table(all_sheet, rows, start_row=1, title=_title_line(COMPANY_SHORT_NAME, rows, run_date), run_date=run_date)
+    next_row = _write_table(all_sheet, rows, start_row=1, title=_title_line(COMPANY_SHORT_NAME, rows, today), run_date=run_date)
     _write_summary_table(all_sheet, _load_summary_rows(conn), start_row=next_row, current_run_id=commission_run_id)
     _autosize_columns(all_sheet, column_count)
 
@@ -1379,7 +1397,7 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
         # every other agency's sheet stays exactly as before.
         is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
         group_next_row = _write_table(
-            sheet, group_rows, start_row=1, title=_title_line(display_name, group_rows, run_date), run_date=run_date,
+            sheet, group_rows, start_row=1, title=_title_line(display_name, group_rows, today), run_date=run_date,
             split_group_name=display_name if is_split_group else None,
         )
         _write_summary_table(
@@ -1432,7 +1450,7 @@ def generate_commission_run_report(conn, commission_run_id, output_path):
                 else:
                     display_rows = agent_rows
                 agent_next_row = _write_table(
-                    agent_sheet, display_rows, start_row=1, title=_title_line(agent_name, agent_rows, run_date),
+                    agent_sheet, display_rows, start_row=1, title=_title_line(agent_name, agent_rows, today),
                     run_date=run_date, split_group_name=None,
                 )
                 _write_summary_table(
@@ -1533,7 +1551,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
     meaningful to export" reasoning as generate_commission_run_report.
     """
     latest_run_id = _latest_confirmed_run_for_period(conn, period_start, period_end)
-    rows = _load_master_rows(conn, commission_run_id=None, run_date=period_end,
+    rows = _load_master_rows(conn, commission_run_id=None,
                               period_start=period_start, period_end=period_end,
                               latest_run_id=latest_run_id)
     if not rows:
@@ -1543,12 +1561,29 @@ def generate_period_report(conn, period_start, period_end, output_path):
         )
     column_count = len(_COLUMNS)
     processed_date = datetime.date.today().isoformat()
+    # "movement as at {date}" (see _write_table) needs the date the
+    # most recent in-period confirmation actually happened on - NOT
+    # period_end, the arbitrary filter boundary someone typed into the
+    # download form. That was a real bug, found via a team report:
+    # downloading "September" with period_end left at an old date (say
+    # the 16th, from an earlier check) made the movement line - and,
+    # via the same mistaken value threading through, the Cooling Off
+    # Period column - silently pretend it was still the 16th, even
+    # though the report's own title correctly showed today. Falls back
+    # to today when nothing's been confirmed in this period yet (no
+    # real "as at" moment exists to show instead).
+    if latest_run_id is not None:
+        movement_run_date = conn.execute(
+            "SELECT run_date FROM commission_runs WHERE id = ?", (latest_run_id,)
+        ).fetchone()["run_date"]
+    else:
+        movement_run_date = processed_date
 
     workbook = Workbook()
     all_sheet = workbook.active
     all_sheet.title = "All"
     all_title = _period_title(COMPANY_SHORT_NAME, period_start, period_end, processed_date)
-    next_row = _write_table(all_sheet, rows, start_row=1, title=all_title, run_date=period_end)
+    next_row = _write_table(all_sheet, rows, start_row=1, title=all_title, run_date=movement_run_date)
     all_summary_rows = _load_summary_rows(conn, period_start=period_start, period_end=period_end)
     _write_summary_table(
         all_sheet, all_summary_rows, start_row=next_row, current_run_id=latest_run_id,
@@ -1578,7 +1613,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
         is_split_group = any(row["commission_split_type"] == "agency_agent_split" for row in group_rows)
         group_title = _period_title(display_name, period_start, period_end, processed_date)
         group_next_row = _write_table(
-            sheet, group_rows, start_row=1, title=group_title, run_date=period_end,
+            sheet, group_rows, start_row=1, title=group_title, run_date=movement_run_date,
             split_group_name=display_name if is_split_group else None,
         )
         group_summary_rows = _load_summary_rows(
@@ -1615,7 +1650,7 @@ def generate_period_report(conn, period_start, period_end, output_path):
                 agent_title = _period_title(agent_name, period_start, period_end, processed_date)
                 agent_next_row = _write_table(
                     agent_sheet, display_rows, start_row=1, title=agent_title,
-                    run_date=period_end, split_group_name=None,
+                    run_date=movement_run_date, split_group_name=None,
                 )
                 agent_summary_rows = _load_summary_rows(
                     conn, agency_group=group_name, agent_name=agent_name,

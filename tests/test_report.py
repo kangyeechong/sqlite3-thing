@@ -742,6 +742,46 @@ def test_cooling_off_period_is_blank_when_signature_date_is_too_recent(tmp_path)
     assert row["Cooling Off Period"] is None
 
 
+def test_re_downloading_an_old_run_shows_todays_date_and_status_not_the_runs_own(tmp_path):
+    """
+    Regression test: re-downloading an old commission run's report
+    (the ordinary "Download Excel report" link on Past Reports, days
+    or weeks after it was first processed) used to show that run's own
+    frozen run_date for both the title's "AS AT {date}" and the
+    Cooling Off Period column, instead of the real day the download
+    actually happened on - breaking the documented promise that a
+    download "always reflects today's full ledger, not a snapshot from
+    when it was first processed" (reports.confirmed_help). Signature
+    Date here is old enough to have cleared cooling-off by today, but
+    NOT as of the run's own old run_date, so this fails under the bug
+    and passes under the fix.
+    """
+    old_run_date = datetime.date.today() - datetime.timedelta(days=20)
+    signature_date = datetime.date.today() - datetime.timedelta(days=25)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60022, "Customer ID": "CUST9922", "Customer Name": "Old Run Customer",
+        "Signature Date": signature_date, "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Full Settlement Paid Date": signature_date,
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=old_run_date)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    today_formatted = datetime.date.today().strftime("%d %B %Y").upper()
+    assert today_formatted in workbook["All"]["A1"].value
+
+    _, all_rows = _find_table_rows(workbook["All"])
+    row = next(r for r in all_rows if r["PO No"] == 60022)
+    assert row["Cooling Off Period"] == "EXPIRED"
+
+
 def test_no_split_agency_sheet_is_one_flat_table(tmp_path):
     """AC001 (XEMP) must not be broken down by agent - one flat table."""
     today = datetime.date.today()
@@ -1927,6 +1967,82 @@ def test_period_report_title_states_when_the_copy_was_processed(tmp_path):
     today_formatted = datetime.date.today().strftime("%d %B %Y").upper()
     assert "01 AUGUST 2026 TO 31 AUGUST 2026" in title
     assert f"PROCESSED AS OF {today_formatted}" in title
+
+
+def test_period_report_cooling_off_status_uses_todays_real_date_not_period_end(tmp_path):
+    """
+    Regression test: a real team report. Cooling Off Period used to be
+    computed against period_end (whatever end-date was typed into the
+    "Overall Commission by period" download form) instead of the
+    actual calendar day the report was generated on - so a PO that had
+    genuinely cleared its 10-day cooling-off window by today still
+    showed blank instead of EXPIRED, if the period_end someone chose
+    (e.g. left over from an earlier, narrower check) fell before that
+    window closed. Signature Date here is far enough in the past that
+    it's unambiguously EXPIRED as of today, but NOT yet as of the
+    stale period_end chosen below (only 5 days after signing).
+    """
+    today = datetime.date.today()
+    signature_date = today - datetime.timedelta(days=20)  # 20 days ago: EXPIRED as of today (>= 10)
+
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60030, "Customer ID": "CUST230", "Customer Name": "Customer 230",
+        "PO Date": signature_date, "Signature Date": signature_date,
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Full Settlement Paid Date": signature_date,
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=today)
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    # A stale period_end: only 5 days after signing, well short of the
+    # 10-day cooling-off window - the bug used exactly this value as
+    # the reference date for "how many days have passed".
+    stale_period_end = (signature_date + datetime.timedelta(days=5)).isoformat()
+    report_path = tmp_path / "report.xlsx"
+    generate_period_report_file(
+        db_path, (signature_date - datetime.timedelta(days=5)).isoformat(), stale_period_end, str(report_path),
+    )
+
+    workbook = openpyxl.load_workbook(report_path)
+    _, all_rows = _find_table_rows(workbook["All"])
+    row = next(r for r in all_rows if r["PO No"] == 60030)
+    assert row["Cooling Off Period"] == "EXPIRED"
+
+
+def test_period_report_movement_line_uses_the_confirming_runs_own_date_not_period_end(tmp_path):
+    """
+    Regression test: the "movement as at {date}" line under the PO
+    table used to show period_end - the arbitrary filter boundary
+    someone typed into the download form - instead of the date the
+    most recent in-period confirmation actually happened on. Confirmed
+    on 10 Sept; downloading with a period_end of 16 Sept (a date that
+    never had anything confirmed on it at all) must still label the
+    movement line with the real confirming date, 10/09/2026.
+    """
+    xlsx_path = tmp_path / "upload.xlsx"
+    build_master_report(xlsx_path, [{
+        "No": 1, "PO No": 60031, "Customer ID": "CUST231", "Customer Name": "Customer 231",
+        "PO Date": datetime.date(2026, 9, 1),
+        "Niche/Tablet Price (RM)": 10000, "Agency Code": "AC001",
+        "Full Settlement Paid Date": datetime.date(2026, 9, 1),
+    }])
+
+    db_path = _db_path(tmp_path)
+    result = process_upload(db_path, str(xlsx_path), run_date=datetime.date(2026, 9, 10))
+    confirm_all_pending(db_path, result["commission_run_id"])
+
+    report_path = tmp_path / "report.xlsx"
+    generate_period_report_file(db_path, "2026-09-01", "2026-09-16", str(report_path))
+
+    sheet = openpyxl.load_workbook(report_path)["All"]
+    movement_cell = next(
+        cell for row in sheet.iter_rows() for cell in row
+        if isinstance(cell.value, str) and cell.value.startswith("movement as at")
+    )
+    assert movement_cell.value == "movement as at 10/09/2026"
 
 
 def test_period_report_includes_a_cancelled_po_gap_in_the_month_it_was_inferred_into(tmp_path):
