@@ -233,6 +233,63 @@ def test_a_po_cancelled_after_confirmation_is_excluded_from_the_movement_line_to
     assert cell_fill not in ("00FFFF00", "FFFFFF00")  # not yellow - nothing to highlight as newly due
 
 
+def test_a_cancelled_pos_paid_dates_are_cleared_too_not_just_the_commission(tmp_path):
+    """
+    Kang's request: a cancelled PO should read as "nothing happened
+    here, only that it's cancelled" - a paid-date left showing next to
+    an otherwise-blanked commission figure would look like a leftover,
+    half-cleared row. Signature Date and PO Date are facts about the
+    sale itself (not about payment), so those two stay even on a
+    cancelled row - same reasoning _COMMISSION_VALUE_KEYS already
+    gives the price columns.
+    """
+    today = datetime.date.today()
+
+    xlsx1 = tmp_path / "run1.xlsx"
+    build_master_report(xlsx1, [{
+        "No": 1, "PO No": 60041, "Customer ID": "CUST241", "Customer Name": "Customer 241",
+        "PO Date": today - datetime.timedelta(days=90),
+        "Signature Date": today - datetime.timedelta(days=90),
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": today - datetime.timedelta(days=60),
+        "Agency Code": "AC001",
+    }])
+    db_path = _db_path(tmp_path)
+    result1 = process_upload(db_path, str(xlsx1), run_date=today - datetime.timedelta(days=60))
+    confirm_all_pending(db_path, result1["commission_run_id"])
+
+    # Customer defaults on instalment 6 - a later upload marks the PO
+    # cancelled without removing the instalment 1 paid-date that
+    # genuinely happened.
+    xlsx2 = tmp_path / "run2.xlsx"
+    build_master_report(xlsx2, [{
+        "No": 1, "PO No": 60041, "Customer ID": "CUST241", "Customer Name": "Customer 241",
+        "PO Date": today - datetime.timedelta(days=90),
+        "Signature Date": today - datetime.timedelta(days=90),
+        "Niche/Tablet Price (RM)": 10000,
+        "First Instalment Paid Date": today - datetime.timedelta(days=60),
+        "Agency Code": "AC001",
+        "Remarks": "Cancelled - defaulted on instalment 6",
+    }])
+    process_upload(db_path, str(xlsx2), run_date=today)
+
+    report_path = tmp_path / "report.xlsx"
+    generate_report(db_path, result1["commission_run_id"], str(report_path))
+
+    workbook = openpyxl.load_workbook(report_path)
+    sheet = workbook["AC001"]
+    headers, ac001_rows = _find_table_rows(sheet)
+    row = next(r for r in ac001_rows if r["PO No"] == 60041)
+
+    assert row["1st Half Commission (RM)"] is None  # already covered above
+    assert row["First Instalment Paid Date"] is None  # now also cleared
+    assert row["Sixth Instalment Paid Date"] is None
+    assert row["Full Settlement Paid Date"] is None
+    # Facts about the sale itself, not about payment - these stay.
+    assert row["PO Date"] is not None
+    assert row["Signature Date"] is not None
+
+
 def test_historically_absorbed_trigger_still_shows_its_commission_amount(tmp_path):
     """
     Regression test: a trigger flagged as already-covered by the

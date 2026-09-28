@@ -879,6 +879,21 @@ _TOTAL_KEYS = (
 # sale's own record, not a "what's owed" figure.
 _COMMISSION_VALUE_KEYS = {"full_payment_commission", "installment_1_commission", "installment_6_commission"}
 
+# Paid-date columns - also cleared to blank on a cancelled/withdrawn
+# row, same request and same reasoning as _COMMISSION_VALUE_KEYS
+# above: a cancelled row should read as "nothing happened here, only
+# that it's cancelled," not leave a stray paid-date sitting next to an
+# otherwise-blanked commission figure. Signature Date and PO Date are
+# deliberately left out - those are facts about the sale itself, not
+# about payment, so they stay even on a cancelled row (same "left
+# alone" reasoning _COMMISSION_VALUE_KEYS already gives the price
+# columns).
+_CANCELLED_PAID_DATE_KEYS = {
+    "full_settlement_paid_date", "full_commission_paid_date",
+    "first_installment_paid_date", "installment_1_commission_paid_date",
+    "sixth_installment_paid_date", "installment_6_commission_paid_date",
+}
+
 # Maps each commission-amount column key to the row-dict flag that says
 # whether THIS run is the one that confirmed it. Two uses: a highlight
 # column only turns yellow when that's true, not merely because it has
@@ -1058,8 +1073,9 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
     movement = {key: 0.0 for key in _CONFIRMED_THIS_RUN_KEY}
     for i, row in enumerate(rows, start=1):
         # A cancelled/withdrawn PO shades the whole row beige and its
-        # commission figures are cleared, not just tinted - see
-        # _COMMISSION_VALUE_KEYS. Checked first so it overrides green
+        # commission figures AND paid-dates are cleared, not just
+        # tinted - see _COMMISSION_VALUE_KEYS and
+        # _CANCELLED_PAID_DATE_KEYS. Checked first so it overrides green
         # below (a PO that was fully paid and *then* cancelled still
         # reads as "nothing owed now", the more important fact).
         is_cancelled_row = row.get("status") in ("cancelled", "withdrawn")
@@ -1080,7 +1096,7 @@ def _write_table(sheet, rows, start_row, title, run_date, split_group_name=None)
         for col, (label, key) in enumerate(_COLUMNS, start=1):
             if key == "row_no":
                 value = i
-            elif is_cancelled_row and key in _COMMISSION_VALUE_KEYS:
+            elif is_cancelled_row and key in _COMMISSION_VALUE_KEYS | _CANCELLED_PAID_DATE_KEYS:
                 value = None
             else:
                 value = row.get(key)
