@@ -149,12 +149,17 @@ _DATE_COLUMNS = {
     "First Instalment Paid Date", "1st Half Commission Paid Date",
     "Sixth Instalment Paid Date", "Balance Half Commission Paid Date",
 }
-# Instalment columns that get a yellow CELL highlight when THIS run put
-# a value in them. Full payment doesn't get a cell highlight - it gets
-# the whole ROW shaded green instead (see _GREEN_FILL / _write_table),
-# matching the real file's convention exactly: full payment marks the
-# entire row, instalments mark just the specific commission cell.
-_HIGHLIGHT_COLUMNS = {"1st Half Commission (RM)", "Balance Half Commission (RM)"}
+# Commission columns that get a yellow CELL highlight when THIS run
+# newly confirmed the value in them - the whole row also shades green
+# once a PO is fully paid off (see _GREEN_FILL / is_fully_paid_row in
+# _write_table below), but a newly-confirmed money figure still stands
+# out on top of that green with its own yellow cell, the same "this
+# is the new figure" signal an instalment cell already gets. Checked
+# with a separate `if`, not `elif`, exactly so this cell-level yellow
+# isn't silently swallowed by the row's own green fill.
+_HIGHLIGHT_COLUMNS = {
+    "Full Payment Commission (RM)", "1st Half Commission (RM)", "Balance Half Commission (RM)",
+}
 
 _SUMMARY_COLUMNS = [
     "DATE RECORD", "Full Commission", "First Half Commission",

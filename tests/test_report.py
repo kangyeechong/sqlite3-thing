@@ -405,12 +405,15 @@ def test_an_earlier_confirmation_shows_plain_on_a_later_download_not_yellow(tmp_
     old_po_row_num = header_row_num + [r["PO No"] for r in ac001_rows].index(60034) + 1
     new_po_row_num = header_row_num + [r["PO No"] for r in ac001_rows].index(60035) + 1
 
-    # Both are full-payment rows, so both are green (fully paid off is
-    # a lifetime fact) - but full payment doesn't get its own cell
-    # highlight either way (whole row green, no separate yellow), so
-    # what distinguishes "confirmed this run" is the movement line.
+    # Both are full-payment rows, so both are green across the whole
+    # row (fully paid off is a lifetime fact) - but only run 2's own
+    # PO gets its commission cell highlighted yellow; run 1's PO
+    # carries forward plainly, not re-highlighted just because it's
+    # showing up on a later download.
     assert sheet.cell(row=old_po_row_num, column=commission_col).value == 1500.0
     assert sheet.cell(row=new_po_row_num, column=commission_col).value == 3000.0
+    assert sheet.cell(row=old_po_row_num, column=commission_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
+    assert sheet.cell(row=new_po_row_num, column=commission_col).fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
 
     header_row_num_2 = header_row_num
     total_row_num = header_row_num_2 + len(ac001_rows) + 1
@@ -526,11 +529,14 @@ def test_date_columns_are_real_dates_formatted_dd_mm_yyyy(tmp_path):
     assert po_date_cell.number_format == "dd/mm/yyyy"
 
 
-def test_full_payment_row_is_shaded_green_matching_the_real_file(tmp_path):
+def test_full_payment_row_is_shaded_green_but_the_new_commission_cell_is_yellow(tmp_path):
     """
-    Confirmed against the real sample file's actual cell formatting
-    (not guessed): full-payment rows there are shaded green across the
-    whole row - not just the commission cell.
+    Confirmed against the real sample file's actual cell formatting:
+    full-payment rows are shaded green across the whole row (fully
+    paid off is a lifetime fact) - but the Full Payment Commission
+    cell itself additionally gets the same yellow "this is the new
+    figure" highlight an instalment cell already gets, when this run
+    is the one that actually confirmed it.
     """
     today = datetime.date.today()
     settlement_date = today - datetime.timedelta(days=6)
@@ -559,8 +565,9 @@ def test_full_payment_row_is_shaded_green_matching_the_real_file(tmp_path):
     commission_col = headers.index("Full Payment Commission (RM)") + 1
     unrelated_col = headers.index("Customer Name") + 1
 
-    assert sheet.cell(row=data_row_num, column=commission_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
-    # Whole row, not just the commission cell.
+    # Newly confirmed this run - the commission cell itself is yellow...
+    assert sheet.cell(row=data_row_num, column=commission_col).fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
+    # ...but the rest of the row (fully paid off) is still green.
     assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
 
 
@@ -609,7 +616,9 @@ def test_balance_half_row_is_also_shaded_green_not_just_full_payment(tmp_path):
 def test_instalment_commission_cell_is_highlighted_yellow_not_the_whole_row(tmp_path):
     """
     Instalments get a yellow highlight on just the specific commission
-    cell that became due, not the whole row - unlike full payment.
+    cell that became due, not the whole row - the row itself only
+    shades green once a PO is fully paid off, which an instalment
+    alone doesn't trigger.
     """
     today = datetime.date.today()
 
@@ -645,8 +654,9 @@ def test_yellow_survives_on_a_row_that_is_also_shaded_green(tmp_path):
     """
     A PO whose very first import already has both full payment and an
     instalment due (both triggers are checked independently, with no
-    rule against both firing at once) must still show the instalment
-    cell in yellow, not have the row's green silently swallow it.
+    rule against both firing at once) must still show BOTH commission
+    cells in yellow, not have the row's green silently swallow either
+    of them.
     """
     today = datetime.date.today()
     settlement_date = today - datetime.timedelta(days=6)
@@ -675,9 +685,11 @@ def test_yellow_survives_on_a_row_that_is_also_shaded_green(tmp_path):
     header_row_num = next(row[0].row for row in sheet.iter_rows() if any(c.value == "PO No" for c in row))
     data_row_num = header_row_num + 1
 
+    full_payment_col = headers.index("Full Payment Commission (RM)") + 1
     instalment_col = headers.index("1st Half Commission (RM)") + 1
     unrelated_col = headers.index("Customer Name") + 1
 
+    assert sheet.cell(row=data_row_num, column=full_payment_col).fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
     assert sheet.cell(row=data_row_num, column=instalment_col).fill.start_color.rgb in ("00FFFF00", "FFFFFF00")
     assert sheet.cell(row=data_row_num, column=unrelated_col).fill.start_color.rgb in ("00C6DEB5", "FFC6DEB5")
 
