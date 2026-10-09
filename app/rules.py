@@ -17,6 +17,15 @@ FULL_PAYMENT_COMMISSION_PCT = 0.15
 # Reference No. codes (INST 01/24, 06/24, 01/06, 06/06, 01/12, 06/12,
 # 01/18, 06/18): the trigger point never moves even though plans run
 # 6, 12, 18, or 24 months.
+#
+# Deliberately exactly half of FULL_PAYMENT_COMMISSION_PCT (same for
+# the AW split and FB-lead deduction pairs below) - paying in full up
+# front is just both installment halves at once. app.commission's
+# _full_payment_remaining_scale leans on that exact 2x relationship to
+# avoid double-paying a half already released via an installment
+# trigger when a contract switches from installment to an early full
+# settlement - change either side without the other and that becomes
+# wrong.
 INSTALLMENT_1_COMMISSION_PCT = 0.075
 INSTALLMENT_6_COMMISSION_PCT = 0.075
 INSTALLMENT_TRIGGER_1 = 1

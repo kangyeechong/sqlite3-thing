@@ -95,6 +95,42 @@ def test_full_payment_not_flagged_twice_across_uploads(tmp_path):
     assert second_result["raised_events"] == []
 
 
+def test_full_payment_after_installment_1_only_pays_the_remaining_half(tmp_path):
+    """
+    A customer who started on an installment plan (paid installment 1,
+    already released 7.5%) and then settles the rest early must only
+    be paid the REMAINING 7.5% when the full-settlement record lands -
+    never a fresh 15% on top of what installment 1 already released.
+    """
+    db_path = _db_path(tmp_path)
+    today = datetime.date(2026, 8, 20)
+
+    row = {
+        "No": 1, "PO No": 90030, "Customer ID": "CUST030", "Customer Name": "Customer 30",
+        "Niche/Tablet Price (RM)": 20000, "Discount (RM)": 500,  # net_price = 19500
+        "Agency Code": "AC001",
+        "First Instalment Paid Date": today,
+    }
+    first_upload = tmp_path / "upload1.xlsx"
+    build_master_report(first_upload, [row])
+    first_result = process_upload(db_path, str(first_upload), run_date=today)
+    assert len(first_result["raised_events"]) == 1
+    assert first_result["raised_events"][0]["trigger_type"] == "installment_1"
+    assert first_result["raised_events"][0]["amount"] == 1462.5  # 7.5% of 19500
+
+    settlement_date = today + datetime.timedelta(days=10)
+    later = settlement_date + datetime.timedelta(days=6)  # past the 5-day gate
+    row["Full Settlement Paid Date"] = settlement_date
+    second_upload = tmp_path / "upload2.xlsx"
+    build_master_report(second_upload, [row])
+    second_result = process_upload(db_path, str(second_upload), run_date=later)
+
+    assert len(second_result["raised_events"]) == 1
+    event = second_result["raised_events"][0]
+    assert event["trigger_type"] == "full_payment"
+    assert event["amount"] == 1462.5  # the remaining 7.5%, not another 15%
+
+
 def test_at_need_flagged_immediately_with_inurnment_date(tmp_path):
     """
     At-Need contracts skip the cooling-off wait entirely, but require

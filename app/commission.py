@@ -173,6 +173,30 @@ _TRIGGER_RULES = {
 }
 
 
+def _full_payment_remaining_scale(contract_row):
+    """
+    Every full-payment percentage in rules.py (flat, AW agency, AW
+    agent, AW's FB-lead deduction) is exactly 2x its installment-half
+    counterpart - the business's own design: paying in full up front
+    is just both halves at once. So a contract that already picked up
+    one or both halves via the installment triggers before a full
+    settlement arrives (a customer who started on an installment plan
+    then settled the rest early - an "EARLY SETTLEMENT"/"BALANCE
+    PAYMENT" AOR reference with no INST tag, see app.aor) must only be
+    paid the REMAINING halves now, as a scale of the full-payment
+    percentages - 1.0 (both halves still owed, the ordinary case), 0.5
+    (one half already paid via installment 1 or 6), or 0.0 (both
+    already paid - a redundant settlement record, nothing left owed).
+    Without this, switching from installment to an early full
+    settlement would double-pay the half already received.
+    """
+    halves_already_paid = (
+        bool(contract_row["installment_1_commission_flagged"])
+        + bool(contract_row["installment_6_commission_flagged"])
+    )
+    return (2 - halves_already_paid) / 2
+
+
 def _build_event(contract, trigger_type, trigger_date):
     """
     Computes one commission_event dict for a trigger already confirmed
@@ -188,18 +212,23 @@ def _build_event(contract, trigger_type, trigger_date):
     agency and agent) - it must never shrink the overall commission
     shown on Overall Commission by period or anywhere else that isn't
     the AW Consultancy sheet's own split columns.
+
+    A full-payment trigger is scaled down first if part of it was
+    already paid out via an installment trigger - see
+    _full_payment_remaining_scale.
     """
     trigger_rules = _TRIGGER_RULES[trigger_type]
     net_price = contract["net_price"]
-    amount = _calculate_commission(net_price, trigger_rules["flat_pct"])
+    scale = _full_payment_remaining_scale(contract) if trigger_type == "full_payment" else 1
+    amount = _calculate_commission(net_price, trigger_rules["flat_pct"] * scale)
 
     if contract["commission_split_type"] == "agency_agent_split":
         agency_amount, agent_amount, _ = calculate_agency_agent_split(
             net_price,
-            trigger_rules["agency_pct"],
-            trigger_rules["agent_pct"],
+            trigger_rules["agency_pct"] * scale,
+            trigger_rules["agent_pct"] * scale,
             bool(contract["fb_lead_referred"]),
-            trigger_rules["deduction_pct"],
+            trigger_rules["deduction_pct"] * scale,
         )
     else:
         agency_amount, agent_amount = None, None

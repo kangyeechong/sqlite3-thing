@@ -135,6 +135,46 @@ def test_fb_lead_flag_does_not_reduce_the_overall_commission_amount(tmp_path):
     assert event["amount"] == 3000.00
 
 
+def test_aw_split_scales_down_too_when_full_payment_follows_installment_1(tmp_path):
+    """
+    Same scale-down as the flat-agency case (see test_commission.py /
+    test_full_payment.py) must also apply to the AW Consultancy
+    agency/agent split, not just the flat `amount` - an AW contract
+    that already released its installment-1 split (3.5%/4%) and then
+    settles early must only release the remaining installment-6-sized
+    split (3.5%/4%), never a fresh full-payment split (7%/8%) on top.
+    """
+    today = datetime.date.today()
+
+    row = {
+        "No": 1, "PO No": 95020, "Customer ID": "AWCUST20", "Customer Name": "AW Test Customer 20",
+        "Niche/Tablet Price (RM)": 20000,
+        "Agency Code": "AC108-02", "FCC/Agent": "AW Agent",
+        "First Instalment Paid Date": today,
+    }
+    db_path = _db_path(tmp_path)
+    first_upload = tmp_path / "upload1.xlsx"
+    build_master_report(first_upload, [row])
+    first_result = process_upload(db_path, str(first_upload), run_date=today)
+    assert len(first_result["raised_events"]) == 1
+    assert first_result["raised_events"][0]["agency_amount"] == 700.00  # 3.5% of 20000
+    assert first_result["raised_events"][0]["agent_amount"] == 800.00   # 4% of 20000
+
+    settlement_date = today + datetime.timedelta(days=10)
+    later = settlement_date + datetime.timedelta(days=6)
+    row["Full Settlement Paid Date"] = settlement_date
+    second_upload = tmp_path / "upload2.xlsx"
+    build_master_report(second_upload, [row])
+    second_result = process_upload(db_path, str(second_upload), run_date=later)
+
+    assert len(second_result["raised_events"]) == 1
+    event = second_result["raised_events"][0]
+    assert event["trigger_type"] == "full_payment"
+    assert event["agency_amount"] == 700.00  # the remaining half, not 1400.00
+    assert event["agent_amount"] == 800.00   # the remaining half, not 1600.00
+    assert event["amount"] == 1500.00        # 700 + 800, not 3000
+
+
 def _find_table_rows(sheet, header_marker="PO No"):
     header_row_num = None
     for row in sheet.iter_rows():
