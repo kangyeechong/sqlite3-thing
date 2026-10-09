@@ -17,7 +17,14 @@ business, not guessed):
     (INST 01/24)" is installment 1, not a full-payment completion.
     Only installment 1 and 6 matter for commission (the fixed release
     points - see rules.py); any other installment number is recorded
-    (so the receipt is never reprocessed) but triggers nothing.
+    (so the receipt is never reprocessed) but triggers nothing. An
+    advance payment covering several installments at once is written
+    either as a comma/"&"-separated list ("INST 01/24, 02/24 & 03/24")
+    or as a start-end range ("INST 01/24 - 06/24") - either way, every
+    number actually typed is captured (a range only captures its two
+    endpoints, never the numbers implied in between, but that's fine
+    since only installment 1 and 6 ever trigger anything). The bracket
+    style around the tag itself ("(...)" vs "[...]") never matters.
   - No INST tag at all: "FULL PAYMENT", "BALANCE PAYMENT", or "EARLY
     SETTLEMENT" all mean this receipt completes the full price (staff
     confirmed "early settlement" = the customer paid off the whole
@@ -76,14 +83,17 @@ _AOR_REQUIRED_HEADERS = (
 _AOR_DATE_FORMAT = "dd/mm/yyyy"
 _AOR_DATE_COLUMNS = {"Acknowledgment Receipt Date", "Purchase Statement Date", "Date Created"}
 
-# Captures the run of digits/slashes/commas/ampersands/whitespace right
-# after "INST" - e.g. "15/24" or "22/24, 23/24 & 24/24" - stopping
-# naturally at the first character that isn't part of that run (a ")"
-# in every real sample seen). Deliberately scoped to just after "INST"
-# rather than searching the whole Reference No for any "N/M" pattern,
-# since a plain date like "07/08/2026" elsewhere in the same text would
-# otherwise falsely match as its own bogus installment number.
-_INST_CLUSTER_PATTERN = re.compile(r"INST\s*([\d/,&\s]+)", re.IGNORECASE)
+# Captures the run of digits/slashes/commas/ampersands/dashes/whitespace
+# right after "INST" - e.g. "15/24" or "22/24, 23/24 & 24/24" or a range
+# like "01/24 - 06/24" (confirmed in a real sample - an advance payment
+# covering several installments written as a start-end range rather
+# than listing every one) - stopping naturally at the first character
+# that isn't part of that run (a ")" in every real sample seen).
+# Deliberately scoped to just after "INST" rather than searching the
+# whole Reference No for any "N/M" pattern, since a plain date like
+# "07/08/2026" elsewhere in the same text would otherwise falsely match
+# as its own bogus installment number.
+_INST_CLUSTER_PATTERN = re.compile(r"INST\s*([\d/,&\s-]+)", re.IGNORECASE)
 _INST_PAIR_PATTERN = re.compile(r"(\d+)\s*/\s*\d+")
 
 _TRIGGER_TO_DATE_COLUMN = {

@@ -54,6 +54,15 @@ def _db_path(tmp_path):
     ("C M6243 MYSTERY PAYMENT", ("unrecognized", None)),
     (None, ("unrecognized", None)),
     ("", ("unrecognized", None)),
+    # Square brackets around the tag are just as valid as round ones -
+    # the bracket character itself was never load-bearing.
+    ("ADVANCE PAYMENT [INST 01/24, 02/24 & 06/24]", ("installments", [1, 2, 6])),
+    # An advance payment covering several installments is sometimes
+    # written as a start-end range rather than listing every one out -
+    # a real sample that the (INST X/Y)-list-only pattern dropped the
+    # 6th installment from, reported as a missed trigger.
+    ("ADVANCE PAYMENT (INST 01/24 - 06/24)", ("installments", [1, 6])),
+    ("ADVANCE PAYMENT [INST 01/24-06/24]", ("installments", [1, 6])),
 ])
 def test_classify_reference(reference, expected):
     assert _classify_reference(reference) == expected
