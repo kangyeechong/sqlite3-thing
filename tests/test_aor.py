@@ -43,6 +43,10 @@ def _db_path(tmp_path):
     # balance ahead of schedule - confirmed with the business, same
     # completing-the-full-price meaning as FULL/BALANCE PAYMENT.
     ("TRF 27/08/2026 EARLY SETTLEMENT", ("full_payment", None)),
+    # A bare "ADVANCE PAYMENT" (no tag, no PARTIAL/BALANCE qualifier) -
+    # confirmed with the business to mean the customer paid the whole
+    # amount owed, same as FULL PAYMENT - not a non-triggering deposit.
+    ("G M5102 ADVANCE PAYMENT", ("full_payment", None)),
     # No tag, not the completing payment: recognized, non-triggering.
     ("HLB 712873 STAMP DUTY", ("skip", None)),
     ("G M4176 DEPOSIT", ("skip", None)),
